@@ -1,6 +1,6 @@
-﻿using Microsoft.OpenApi.Models;
 using System;
 using System.Collections.Generic;
+using Microsoft.OpenApi;
 
 namespace Soenneker.OpenApi.Merger.Dtos;
 

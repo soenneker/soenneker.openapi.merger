@@ -1,7 +1,7 @@
-using Microsoft.OpenApi.Models;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.OpenApi;
 
 namespace Soenneker.OpenApi.Merger.Abstract;
 

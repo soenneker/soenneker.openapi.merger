@@ -1,7 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.OpenApi.Models;
-using Microsoft.OpenApi.Readers;
-using Microsoft.OpenApi.Writers;
 using Soenneker.Git.Util.Abstract;
 using Soenneker.OpenApi.Merger.Abstract;
 using System;
@@ -12,8 +9,11 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.OpenApi;
+using Microsoft.OpenApi.Reader;
 using Soenneker.OpenApi.Merger.Dtos;
 using Soenneker.Extensions.String;
+using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
 
 namespace Soenneker.OpenApi.Merger;
@@ -45,7 +45,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
     public ValueTask<OpenApiDocument> MergeOpenApis(params (string prefix, string filePath)[] inputs)
     {
-        return MergeOpenApis((IEnumerable<(string prefix, string filePath)>)inputs, CancellationToken.None);
+        return MergeOpenApis(inputs, CancellationToken.None);
     }
 
     public async ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs,
@@ -156,29 +156,36 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
     private ValueTask<OpenApiDocument?> TryLoadDocument(string filePath, CancellationToken cancellationToken)
     {
+        return TryLoadDocumentInternal(filePath, cancellationToken);
+    }
+
+    private async ValueTask<OpenApiDocument?> TryLoadDocumentInternal(string filePath, CancellationToken cancellationToken)
+    {
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            using FileStream stream = File.OpenRead(filePath);
-            var reader = new OpenApiStreamReader();
-            OpenApiDocument? document = reader.Read(stream, out OpenApiDiagnostic? diagnostic);
+            await using FileStream stream = File.OpenRead(filePath);
+            ReadResult readResult = await OpenApiDocument.LoadAsync(stream, GetOpenApiFormat(filePath), new OpenApiReaderSettings(), cancellationToken)
+                                                         .NoSync();
+            OpenApiDocument? document = readResult.Document;
+            OpenApiDiagnostic? diagnostic = readResult.Diagnostic;
 
             if (document == null)
             {
                 _logger.LogDebug("Skipping {FilePath} because it did not produce an OpenAPI document.", filePath);
-                return ValueTask.FromResult<OpenApiDocument?>(null);
+                return null;
             }
 
             if (diagnostic?.Errors?.Count > 0)
                 _logger.LogWarning("OpenAPI read for {FilePath} finished with {ErrorCount} diagnostic errors.", filePath, diagnostic.Errors.Count);
 
-            return ValueTask.FromResult<OpenApiDocument?>(document);
+            return document;
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Skipping non-OpenAPI file {FilePath}.", filePath);
-            return ValueTask.FromResult<OpenApiDocument?>(null);
+            return null;
         }
     }
 
@@ -202,7 +209,18 @@ public sealed class OpenApiMerger : IOpenApiMerger
                 Version = "1.0.0"
             },
             Paths = new OpenApiPaths(),
-            Components = new OpenApiComponents(),
+            Components = new OpenApiComponents
+            {
+                Schemas = new Dictionary<string, IOpenApiSchema>(),
+                Parameters = new Dictionary<string, IOpenApiParameter>(),
+                Responses = new Dictionary<string, IOpenApiResponse>(),
+                RequestBodies = new Dictionary<string, IOpenApiRequestBody>(),
+                Headers = new Dictionary<string, IOpenApiHeader>(),
+                SecuritySchemes = new Dictionary<string, IOpenApiSecurityScheme>(),
+                Links = new Dictionary<string, IOpenApiLink>(),
+                Callbacks = new Dictionary<string, IOpenApiCallback>(),
+                Examples = new Dictionary<string, IOpenApiExample>()
+            },
             Servers = new List<OpenApiServer>()
         };
 
@@ -229,8 +247,9 @@ public sealed class OpenApiMerger : IOpenApiMerger
         RewriteComponentReferences(root, sourceDocument, sourceLookup);
 
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(root.ToJsonString()));
-        var reader = new OpenApiStreamReader();
-        OpenApiDocument? transformed = reader.Read(stream, out OpenApiDiagnostic? diagnostic);
+        ReadResult readResult = OpenApiDocument.Load(stream, OpenApiConstants.Json, new OpenApiReaderSettings());
+        OpenApiDocument? transformed = readResult.Document;
+        OpenApiDiagnostic? diagnostic = readResult.Diagnostic;
 
         if (transformed == null)
             throw new InvalidOperationException($"Failed to rehydrate transformed OpenAPI document '{sourceDocument.FilePath}'.");
@@ -244,27 +263,31 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
     private static void MergeInto(OpenApiDocument merged, OpenApiDocument sourceDocument, string prefix)
     {
+        IList<OpenApiServer> mergedServers = merged.Servers ??= [];
+
         foreach (OpenApiServer server in sourceDocument.Servers ?? [])
         {
-            if (merged.Servers.All(existing => !string.Equals(existing.Url, server.Url, StringComparison.OrdinalIgnoreCase)))
-                merged.Servers.Add(server);
+            if (mergedServers.All(existing => !string.Equals(existing.Url, server.Url, StringComparison.OrdinalIgnoreCase)))
+                mergedServers.Add(server);
         }
 
-        foreach ((string pathKey, OpenApiPathItem pathItem) in sourceDocument.Paths)
+        foreach ((string pathKey, IOpenApiPathItem pathItem) in sourceDocument.Paths)
         {
             string mergedPath = PrefixPath(prefix, pathKey);
             merged.Paths[mergedPath] = pathItem;
         }
 
-        CopyComponentSection(sourceDocument.Components?.Schemas, merged.Components.Schemas);
-        CopyComponentSection(sourceDocument.Components?.Parameters, merged.Components.Parameters);
-        CopyComponentSection(sourceDocument.Components?.Responses, merged.Components.Responses);
-        CopyComponentSection(sourceDocument.Components?.RequestBodies, merged.Components.RequestBodies);
-        CopyComponentSection(sourceDocument.Components?.Headers, merged.Components.Headers);
-        CopyComponentSection(sourceDocument.Components?.SecuritySchemes, merged.Components.SecuritySchemes);
-        CopyComponentSection(sourceDocument.Components?.Links, merged.Components.Links);
-        CopyComponentSection(sourceDocument.Components?.Callbacks, merged.Components.Callbacks);
-        CopyComponentSection(sourceDocument.Components?.Examples, merged.Components.Examples);
+        OpenApiComponents mergedComponents = merged.Components ?? throw new InvalidOperationException("Merged document components were not initialized.");
+
+        CopyComponentSection(sourceDocument.Components?.Schemas, mergedComponents.Schemas);
+        CopyComponentSection(sourceDocument.Components?.Parameters, mergedComponents.Parameters);
+        CopyComponentSection(sourceDocument.Components?.Responses, mergedComponents.Responses);
+        CopyComponentSection(sourceDocument.Components?.RequestBodies, mergedComponents.RequestBodies);
+        CopyComponentSection(sourceDocument.Components?.Headers, mergedComponents.Headers);
+        CopyComponentSection(sourceDocument.Components?.SecuritySchemes, mergedComponents.SecuritySchemes);
+        CopyComponentSection(sourceDocument.Components?.Links, mergedComponents.Links);
+        CopyComponentSection(sourceDocument.Components?.Callbacks, mergedComponents.Callbacks);
+        CopyComponentSection(sourceDocument.Components?.Examples, mergedComponents.Examples);
     }
 
     private static void CopyComponentSection<T>(IDictionary<string, T>? source, IDictionary<string, T>? destination)
@@ -555,6 +578,19 @@ public sealed class OpenApiMerger : IOpenApiMerger
     {
         return segment.Replace("~1", "/", StringComparison.Ordinal)
                       .Replace("~0", "~", StringComparison.Ordinal);
+    }
+
+    private static string GetOpenApiFormat(string filePath)
+    {
+        string extension = Path.GetExtension(filePath);
+
+        return extension.ToLowerInvariant() switch
+        {
+            ".json" => OpenApiConstants.Json,
+            ".yaml" => OpenApiConstants.Yaml,
+            ".yml" => OpenApiConstants.Yml,
+            _ => throw new InvalidOperationException($"Unsupported OpenAPI file extension: {extension}")
+        };
     }
 
 
