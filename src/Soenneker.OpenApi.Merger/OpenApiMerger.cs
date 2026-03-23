@@ -51,6 +51,114 @@ public sealed class OpenApiMerger : IOpenApiMerger
         _fileUtil = fileUtil;
     }
 
+    private async ValueTask<OpenApiDocument> MergeSourceDocuments(List<SourceDocument> sourceDocuments, CancellationToken cancellationToken)
+    {
+        Dictionary<string, HashSet<string>> reservedComponentNames = CreateReservedComponentNames();
+
+        foreach (SourceDocument sourceDocument in sourceDocuments)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                sourceDocument.ComponentRenameMaps = BuildComponentRenameMaps(sourceDocument.Prefix, sourceDocument.Document.Components, reservedComponentNames);
+                AddReservedComponentNames(sourceDocument.ComponentRenameMaps, reservedComponentNames);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Skipping component rename preparation for '{FilePath}' (prefix '{Prefix}').",
+                    sourceDocument.FilePath, sourceDocument.Prefix);
+
+                sourceDocument.ComponentRenameMaps = [];
+            }
+        }
+
+        Dictionary<string, SourceDocument> sourceLookup = sourceDocuments
+            .GroupBy(static source => NormalizePath(source.FilePath), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        OpenApiDocument merged = CreateMergedDocument();
+
+        foreach (SourceDocument sourceDocument in sourceDocuments)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                OpenApiDocument? transformed = await TransformDocument(sourceDocument, sourceLookup, cancellationToken).NoSync();
+
+                if (transformed == null)
+                {
+                    _logger.LogDebug("Skipping '{FilePath}' because transform returned null.", sourceDocument.FilePath);
+                    continue;
+                }
+
+                MergeInto(merged, transformed, sourceDocument.Prefix, _logger);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Skipping source document '{FilePath}' (prefix '{Prefix}') because merge failed.",
+                    sourceDocument.FilePath, sourceDocument.Prefix);
+            }
+        }
+
+        OpenApiDocument validated;
+
+        try
+        {
+            validated = ValidateMergedDocument(merged);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ValidateMergedDocument() failed. Using unvalidated merged document.");
+            validated = merged;
+        }
+
+        try
+        {
+            EnsureUniqueOperationIds(validated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "EnsureUniqueOperationIds() failed. Continuing with current document.");
+        }
+
+        try
+        {
+            EnsureSecuritySchemesResolve(validated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "EnsureSecuritySchemesResolve() failed. Continuing with current document.");
+        }
+
+        try
+        {
+            EnsureReferencesResolve(validated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "EnsureReferencesResolve() failed. Continuing with current document.");
+        }
+
+        try
+        {
+            EnsureDiscriminatorMappingsResolve(validated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "EnsureDiscriminatorMappingsResolve() failed. Continuing with current document.");
+        }
+
+        return validated;
+    }
+
     public async ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(inputs);
@@ -217,39 +325,100 @@ public sealed class OpenApiMerger : IOpenApiMerger
         }
     }
 
-    private async ValueTask<OpenApiDocument> MergeSourceDocuments(List<SourceDocument> sourceDocuments, CancellationToken cancellationToken)
+    private static void MergeInto(OpenApiDocument merged, OpenApiDocument sourceDocument, string prefix, ILogger logger)
     {
-        Dictionary<string, HashSet<string>> reservedComponentNames = CreateReservedComponentNames();
+        if (merged == null || sourceDocument == null)
+            return;
 
-        foreach (SourceDocument sourceDocument in sourceDocuments)
+        IList<OpenApiServer> mergedServers = merged.Servers ??= [];
+
+        if (sourceDocument.Servers != null)
         {
-            sourceDocument.ComponentRenameMaps = BuildComponentRenameMaps(sourceDocument.Prefix, sourceDocument.Document.Components, reservedComponentNames);
+            foreach (OpenApiServer? server in sourceDocument.Servers)
+            {
+                if (server == null || string.IsNullOrWhiteSpace(server.Url))
+                    continue;
 
-            AddReservedComponentNames(sourceDocument.ComponentRenameMaps, reservedComponentNames);
+                if (mergedServers.All(existing => existing == null || !string.Equals(existing.Url, server.Url, StringComparison.OrdinalIgnoreCase)))
+                    mergedServers.Add(server);
+            }
         }
 
-        Dictionary<string, SourceDocument> sourceLookup = sourceDocuments.ToDictionary(
-            static source => NormalizePath(source.FilePath), StringComparer.OrdinalIgnoreCase);
+        ISet<OpenApiTag> mergedTags = merged.Tags ??= new HashSet<OpenApiTag>();
 
-        OpenApiDocument merged = CreateMergedDocument();
-
-        foreach (SourceDocument sourceDocument in sourceDocuments)
+        if (sourceDocument.Tags != null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            foreach (OpenApiTag? tag in sourceDocument.Tags)
+            {
+                if (tag == null || string.IsNullOrWhiteSpace(tag.Name))
+                    continue;
 
-            OpenApiDocument transformed = await TransformDocument(sourceDocument, sourceLookup, cancellationToken)
-                .NoSync();
-            MergeInto(merged, transformed, sourceDocument.Prefix);
+                if (!mergedTags.Any(existing => existing != null && string.Equals(existing.Name, tag.Name, StringComparison.Ordinal)))
+                    mergedTags.Add(tag);
+            }
         }
 
-        OpenApiDocument validated = ValidateMergedDocument(merged);
+        merged.Paths ??= new OpenApiPaths();
 
-        EnsureUniqueOperationIds(validated);
-        EnsureSecuritySchemesResolve(validated);
-        EnsureReferencesResolve(validated);
-        EnsureDiscriminatorMappingsResolve(validated);
+        if (sourceDocument.Paths != null)
+        {
+            foreach (var kvp in sourceDocument.Paths)
+            {
+                string pathKey = kvp.Key;
+                IOpenApiPathItem? pathItem = kvp.Value;
 
-        return validated;
+                if (string.IsNullOrWhiteSpace(pathKey))
+                {
+                    logger.LogDebug("Skipping path with null/empty key from prefix '{Prefix}'.", prefix);
+                    continue;
+                }
+
+                if (pathItem == null)
+                {
+                    logger.LogDebug("Skipping null path item for '{PathKey}' from prefix '{Prefix}'.", pathKey, prefix);
+                    continue;
+                }
+
+                string mergedPath = PrefixPath(prefix, pathKey);
+
+                if (string.IsNullOrWhiteSpace(mergedPath))
+                {
+                    logger.LogDebug("Skipping merged path because PrefixPath returned null/empty for '{PathKey}' and prefix '{Prefix}'.", pathKey, prefix);
+                    continue;
+                }
+
+                if (merged.Paths.ContainsKey(mergedPath))
+                {
+                    logger.LogWarning("Skipping duplicate merged path '{MergedPath}'.", mergedPath);
+                    continue;
+                }
+
+                merged.Paths[mergedPath] = pathItem;
+            }
+        }
+
+        OpenApiComponents mergedComponents = merged.Components ??= new OpenApiComponents
+        {
+            Schemas = new Dictionary<string, IOpenApiSchema>(StringComparer.Ordinal),
+            Parameters = new Dictionary<string, IOpenApiParameter>(StringComparer.Ordinal),
+            Responses = new Dictionary<string, IOpenApiResponse>(StringComparer.Ordinal),
+            RequestBodies = new Dictionary<string, IOpenApiRequestBody>(StringComparer.Ordinal),
+            Headers = new Dictionary<string, IOpenApiHeader>(StringComparer.Ordinal),
+            SecuritySchemes = new Dictionary<string, IOpenApiSecurityScheme>(StringComparer.Ordinal),
+            Links = new Dictionary<string, IOpenApiLink>(StringComparer.Ordinal),
+            Callbacks = new Dictionary<string, IOpenApiCallback>(StringComparer.Ordinal),
+            Examples = new Dictionary<string, IOpenApiExample>(StringComparer.Ordinal)
+        };
+
+        CopyComponentSection(sourceDocument.Components?.Schemas, mergedComponents.Schemas, "schemas", logger);
+        CopyComponentSection(sourceDocument.Components?.Parameters, mergedComponents.Parameters, "parameters", logger);
+        CopyComponentSection(sourceDocument.Components?.Responses, mergedComponents.Responses, "responses", logger);
+        CopyComponentSection(sourceDocument.Components?.RequestBodies, mergedComponents.RequestBodies, "requestBodies", logger);
+        CopyComponentSection(sourceDocument.Components?.Headers, mergedComponents.Headers, "headers", logger);
+        CopyComponentSection(sourceDocument.Components?.SecuritySchemes, mergedComponents.SecuritySchemes, "securitySchemes", logger);
+        CopyComponentSection(sourceDocument.Components?.Links, mergedComponents.Links, "links", logger);
+        CopyComponentSection(sourceDocument.Components?.Callbacks, mergedComponents.Callbacks, "callbacks", logger);
+        CopyComponentSection(sourceDocument.Components?.Examples, mergedComponents.Examples, "examples", logger);
     }
 
     private static OpenApiDocument CreateMergedDocument()
@@ -279,85 +448,87 @@ public sealed class OpenApiMerger : IOpenApiMerger
         };
     }
 
-    private ValueTask<OpenApiDocument> TransformDocument(SourceDocument sourceDocument, Dictionary<string, SourceDocument> sourceLookup,
+    private ValueTask<OpenApiDocument?> TransformDocument(SourceDocument sourceDocument, Dictionary<string, SourceDocument> sourceLookup,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        JsonNode root = JsonNode.Parse(ToJson(sourceDocument.Document)) ??
-                        throw new InvalidOperationException($"Failed to parse serialized OpenAPI document '{sourceDocument.FilePath}'.");
-
-        RenameComponentKeys(root, sourceDocument.ComponentRenameMaps);
-        RewriteComponentReferences(root, sourceDocument, sourceLookup);
-        RewriteDiscriminatorMappings(root, sourceDocument, sourceLookup);
-        RewriteSecurityRequirementNames(root, sourceDocument.ComponentRenameMaps);
-        NamespaceOperationIds(root, sourceDocument.Prefix);
-
-        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(root.ToJsonString()));
-        ReadResult readResult = OpenApiDocument.Load(stream, OpenApiConstants.Json, new OpenApiReaderSettings());
-        OpenApiDocument? transformed = readResult.Document;
-
-        if (transformed == null)
-            throw new InvalidOperationException($"Failed to rehydrate transformed OpenAPI document '{sourceDocument.FilePath}'.");
-
-        LogDiagnostics("Transformed OpenAPI document", sourceDocument.FilePath, readResult.Diagnostic);
-
-        return ValueTask.FromResult(transformed);
-    }
-
-    private static void MergeInto(OpenApiDocument merged, OpenApiDocument sourceDocument, string prefix)
-    {
-        IList<OpenApiServer> mergedServers = merged.Servers ??= [];
-
-        foreach (OpenApiServer server in sourceDocument.Servers ?? [])
+        try
         {
-            if (mergedServers.All(existing => !string.Equals(existing.Url, server.Url, StringComparison.OrdinalIgnoreCase)))
-                mergedServers.Add(server);
-        }
+            cancellationToken.ThrowIfCancellationRequested();
 
-        ISet<OpenApiTag> mergedTags = merged.Tags ??= new HashSet<OpenApiTag>();
+            string json = ToJson(sourceDocument.Document);
 
-        if (sourceDocument.Tags != null)
-        {
-            foreach (OpenApiTag tag in sourceDocument.Tags)
+            if (string.IsNullOrWhiteSpace(json))
             {
-                if (!mergedTags.Any(existing => string.Equals(existing.Name, tag.Name, StringComparison.Ordinal)))
-                    mergedTags.Add(tag);
+                _logger.LogWarning("Skipping '{FilePath}' because serialized OpenAPI JSON was empty.", sourceDocument.FilePath);
+                return ValueTask.FromResult<OpenApiDocument?>(null);
             }
-        }
 
-        foreach ((string pathKey, IOpenApiPathItem pathItem) in sourceDocument.Paths)
+            JsonNode? root = JsonNode.Parse(json);
+
+            if (root == null)
+            {
+                _logger.LogWarning("Skipping '{FilePath}' because serialized OpenAPI JSON could not be parsed.", sourceDocument.FilePath);
+                return ValueTask.FromResult<OpenApiDocument?>(null);
+            }
+
+            RenameComponentKeys(root, sourceDocument.ComponentRenameMaps);
+            RewriteComponentReferences(root, sourceDocument, sourceLookup);
+            RewriteDiscriminatorMappings(root, sourceDocument, sourceLookup);
+            RewriteSecurityRequirementNames(root, sourceDocument.ComponentRenameMaps);
+            NamespaceOperationIds(root, sourceDocument.Prefix);
+
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(root.ToJsonString()));
+            ReadResult readResult = OpenApiDocument.Load(stream, OpenApiConstants.Json, new OpenApiReaderSettings());
+            OpenApiDocument? transformed = readResult.Document;
+
+            if (transformed == null)
+            {
+                _logger.LogWarning("Skipping '{FilePath}' because transformed document could not be rehydrated.", sourceDocument.FilePath);
+                return ValueTask.FromResult<OpenApiDocument?>(null);
+            }
+
+            LogDiagnostics("Transformed OpenAPI document", sourceDocument.FilePath, readResult.Diagnostic);
+
+            return ValueTask.FromResult<OpenApiDocument?>(transformed);
+        }
+        catch (OperationCanceledException)
         {
-            string mergedPath = PrefixPath(prefix, pathKey);
-
-            if (merged.Paths.ContainsKey(mergedPath))
-                throw new InvalidOperationException($"Duplicate merged path detected: '{mergedPath}'.");
-
-            merged.Paths[mergedPath] = pathItem;
+            throw;
         }
-
-        OpenApiComponents mergedComponents = merged.Components ?? throw new InvalidOperationException("Merged document components were not initialized.");
-
-        CopyComponentSection(sourceDocument.Components?.Schemas, mergedComponents.Schemas, "schemas");
-        CopyComponentSection(sourceDocument.Components?.Parameters, mergedComponents.Parameters, "parameters");
-        CopyComponentSection(sourceDocument.Components?.Responses, mergedComponents.Responses, "responses");
-        CopyComponentSection(sourceDocument.Components?.RequestBodies, mergedComponents.RequestBodies, "requestBodies");
-        CopyComponentSection(sourceDocument.Components?.Headers, mergedComponents.Headers, "headers");
-        CopyComponentSection(sourceDocument.Components?.SecuritySchemes, mergedComponents.SecuritySchemes, "securitySchemes");
-        CopyComponentSection(sourceDocument.Components?.Links, mergedComponents.Links, "links");
-        CopyComponentSection(sourceDocument.Components?.Callbacks, mergedComponents.Callbacks, "callbacks");
-        CopyComponentSection(sourceDocument.Components?.Examples, mergedComponents.Examples, "examples");
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Skipping '{FilePath}' because transformation failed.", sourceDocument.FilePath);
+            return ValueTask.FromResult<OpenApiDocument?>(null);
+        }
     }
 
-    private static void CopyComponentSection<T>(IDictionary<string, T>? source, IDictionary<string, T>? destination, string sectionName)
+    private static void CopyComponentSection<T>(IDictionary<string, T>? source, IDictionary<string, T>? destination, string sectionName, ILogger logger)
     {
-        if (source == null || destination == null)
+        if (source == null || source.Count == 0 || destination == null)
             return;
 
-        foreach ((string key, T value) in source)
+        foreach (var kvp in source)
         {
+            string key = kvp.Key;
+            T value = kvp.Value;
+
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                logger.LogDebug("Skipping component in '{SectionName}' because key was null/empty.", sectionName);
+                continue;
+            }
+
+            if (value == null)
+            {
+                logger.LogDebug("Skipping null component '{Key}' in '{SectionName}'.", key, sectionName);
+                continue;
+            }
+
             if (destination.ContainsKey(key))
-                throw new InvalidOperationException($"Duplicate component key detected in '{sectionName}': '{key}'.");
+            {
+                logger.LogWarning("Skipping duplicate component key '{Key}' in '{SectionName}'.", key, sectionName);
+                continue;
+            }
 
             destination[key] = value;
         }
@@ -782,25 +953,60 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
     private void EnsureUniqueOperationIds(OpenApiDocument document)
     {
-        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (document?.Paths == null || document.Paths.Count == 0)
+            return;
 
-        foreach ((string path, IOpenApiPathItem pathItem) in document.Paths)
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var pathKvp in document.Paths)
         {
-            foreach ((HttpMethod method, OpenApiOperation operation) in pathItem.Operations)
+            string path = pathKvp.Key;
+
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+
+            IOpenApiPathItem? pathItem = pathKvp.Value;
+
+            if (pathItem?.Operations == null || pathItem.Operations.Count == 0)
+                continue;
+
+            foreach (var opKvp in pathItem.Operations)
             {
-                if (string.IsNullOrWhiteSpace(operation.OperationId))
-                    throw new InvalidOperationException($"Operation '{method} {path}' is missing an operationId after merge.");
+                HttpMethod method = opKvp.Key;
+                OpenApiOperation? operation = opKvp.Value;
 
-                string location = $"{method} {path}";
+                if (operation == null)
+                {
+                    _logger.LogDebug("Skipping null operation at '{Method} {Path}'.", method, path);
+                    continue;
+                }
 
-                if (seen.TryGetValue(operation.OperationId, out string? prior))
-                    throw new InvalidOperationException($"Duplicate operationId '{operation.OperationId}' found at '{prior}' and '{location}'.");
+                string baseOperationId = operation.OperationId?.Trim() ?? string.Empty;
 
-                seen[operation.OperationId] = location;
+                if (baseOperationId.Length == 0)
+                {
+                    baseOperationId = BuildGeneratedOperationId("merged", method.ToString(), path);
+                    _logger.LogDebug("Generated operationId '{OperationId}' for '{Method} {Path}'.", baseOperationId, method, path);
+                }
+
+                string uniqueOperationId = baseOperationId;
+                int suffix = 2;
+
+                while (!seen.Add(uniqueOperationId))
+                {
+                    uniqueOperationId = $"{baseOperationId}_{suffix}";
+                    suffix++;
+                }
+
+                if (!string.Equals(operation.OperationId, uniqueOperationId, StringComparison.Ordinal))
+                {
+                    _logger.LogDebug("Adjusted operationId for '{Method} {Path}' to '{OperationId}'.", method, path, uniqueOperationId);
+                }
+
+                operation.OperationId = uniqueOperationId;
             }
         }
     }
-
     private void EnsureSecuritySchemesResolve(OpenApiDocument document)
     {
         JsonNode root = JsonNode.Parse(ToJson(document)) ??
