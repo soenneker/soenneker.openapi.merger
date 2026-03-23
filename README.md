@@ -16,6 +16,10 @@ dotnet add package Soenneker.OpenApi.Merger
 ```csharp
 using Soenneker.OpenApi.Merger.Abstract;
 
+OpenApiDocument mergedFromFiles = await openApiMerger.MergeOpenApis(
+    ("contacts", @"C:\specs\contacts.json"),
+    ("locations", @"C:\specs\locations.yaml"));
+
 OpenApiDocument mergedFromDirectory = await openApiMerger.MergeDirectory(@"C:\specs");
 string json = openApiMerger.ToJson(mergedFromDirectory);
 
@@ -25,6 +29,7 @@ OpenApiDocument mergedFromGitSubdirectory = await openApiMerger.MergeGitUrl("htt
 
 The merger:
 
+- can merge an explicit set of `(prefix, filePath)` OpenAPI inputs
 - scans a directory recursively for `.json`, `.yaml`, and `.yml` OpenAPI files
 - prefixes paths with the source file name when needed
 - renames colliding component names and rewrites component `$ref` values to match

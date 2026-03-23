@@ -43,6 +43,29 @@ public sealed class OpenApiMerger : IOpenApiMerger
         _gitUtil = gitUtil;
     }
 
+    public ValueTask<OpenApiDocument> MergeOpenApis(params (string prefix, string filePath)[] inputs)
+    {
+        return MergeOpenApis((IEnumerable<(string prefix, string filePath)>)inputs, CancellationToken.None);
+    }
+
+    public async ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+
+        (string prefix, string filePath)[] sourceInputs = inputs.ToArray();
+
+        if (sourceInputs.Length == 0)
+            throw new InvalidOperationException("No OpenAPI inputs were provided.");
+
+        List<SourceDocument> sourceDocuments = await LoadSourceDocuments(sourceInputs, cancellationToken).NoSync();
+
+        if (sourceDocuments.Count == 0)
+            throw new InvalidOperationException("No readable OpenAPI documents were found in the provided inputs.");
+
+        return await MergeSourceDocuments(sourceDocuments, cancellationToken).NoSync();
+    }
+
     public async ValueTask<OpenApiDocument> MergeDirectory(string directoryPath, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(directoryPath))
@@ -59,7 +82,8 @@ public sealed class OpenApiMerger : IOpenApiMerger
         if (files.Length == 0)
             throw new InvalidOperationException($"No OpenAPI files were found beneath '{directoryPath}'.");
 
-        List<SourceDocument> sourceDocuments = await LoadSourceDocuments(files, cancellationToken).NoSync();
+        List<SourceDocument> sourceDocuments = await LoadSourceDocuments(files.Select(static file => (Path.GetFileNameWithoutExtension(file), file)),
+            cancellationToken).NoSync();
 
         if (sourceDocuments.Count == 0)
             throw new InvalidOperationException($"No readable OpenAPI documents were found beneath '{directoryPath}'.");
@@ -99,21 +123,32 @@ public sealed class OpenApiMerger : IOpenApiMerger
         return stringWriter.ToString();
     }
 
-    private async ValueTask<List<SourceDocument>> LoadSourceDocuments(IEnumerable<string> files, CancellationToken cancellationToken)
+    private async ValueTask<List<SourceDocument>> LoadSourceDocuments(IEnumerable<(string prefix, string filePath)> inputs,
+        CancellationToken cancellationToken)
     {
         var sourceDocuments = new List<SourceDocument>();
 
-        foreach (string file in files)
+        foreach ((string prefix, string filePath) in inputs)
         {
+            if (string.IsNullOrWhiteSpace(prefix))
+                throw new ArgumentException("OpenAPI input prefix cannot be null or whitespace.", nameof(inputs));
+
+            if (string.IsNullOrWhiteSpace(filePath))
+                throw new ArgumentException("OpenAPI input file path cannot be null or whitespace.", nameof(inputs));
+
             cancellationToken.ThrowIfCancellationRequested();
 
-            OpenApiDocument? document = await TryLoadDocument(file, cancellationToken).NoSync();
+            string fullPath = Path.GetFullPath(filePath);
+
+            if (!File.Exists(fullPath))
+                throw new FileNotFoundException($"OpenAPI file was not found: {fullPath}", fullPath);
+
+            OpenApiDocument? document = await TryLoadDocument(fullPath, cancellationToken).NoSync();
 
             if (document == null)
                 continue;
 
-            string prefix = Path.GetFileNameWithoutExtension(file);
-            sourceDocuments.Add(new SourceDocument(Path.GetFullPath(file), prefix, document));
+            sourceDocuments.Add(new SourceDocument(fullPath, prefix, document));
         }
 
         return sourceDocuments;

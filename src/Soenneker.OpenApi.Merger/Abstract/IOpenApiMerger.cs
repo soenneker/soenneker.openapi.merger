@@ -1,4 +1,5 @@
 using Microsoft.OpenApi.Models;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -9,6 +10,16 @@ namespace Soenneker.OpenApi.Merger.Abstract;
 /// </summary>
 public interface IOpenApiMerger
 {
+    /// <summary>
+    /// Merges the provided OpenAPI files into a single document, prefixing paths by the supplied input prefix.
+    /// </summary>
+    ValueTask<OpenApiDocument> MergeOpenApis(params (string prefix, string filePath)[] inputs);
+
+    /// <summary>
+    /// Merges the provided OpenAPI files into a single document, prefixing paths by the supplied input prefix.
+    /// </summary>
+    ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Merges every OpenAPI file discovered beneath <paramref name="directoryPath"/> into a single document.
     /// </summary>
