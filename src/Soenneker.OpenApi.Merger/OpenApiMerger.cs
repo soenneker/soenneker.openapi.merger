@@ -15,6 +15,8 @@ using Soenneker.OpenApi.Merger.Dtos;
 using Soenneker.Extensions.String;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
+using Soenneker.Utils.Directory.Abstract;
+using Soenneker.Utils.File.Abstract;
 
 namespace Soenneker.OpenApi.Merger;
 
@@ -36,11 +38,15 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
     private readonly ILogger<OpenApiMerger> _logger;
     private readonly IGitUtil _gitUtil;
+    private readonly IDirectoryUtil _directoryUtil;
+    private readonly IFileUtil _fileUtil;
 
-    public OpenApiMerger(ILogger<OpenApiMerger> logger, IGitUtil gitUtil)
+    public OpenApiMerger(ILogger<OpenApiMerger> logger, IGitUtil gitUtil, IDirectoryUtil directoryUtil, IFileUtil fileUtil)
     {
         _logger = logger;
         _gitUtil = gitUtil;
+        _directoryUtil = directoryUtil;
+        _fileUtil = fileUtil;
     }
     
     public async ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs,
@@ -66,7 +72,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
         if (string.IsNullOrWhiteSpace(directoryPath))
             throw new ArgumentException("Directory path cannot be null or whitespace.", nameof(directoryPath));
 
-        if (!Directory.Exists(directoryPath))
+        if (!await _directoryUtil.Exists(directoryPath, cancellationToken).NoSync())
             throw new DirectoryNotFoundException($"OpenAPI directory was not found: {directoryPath}");
 
         string[] files = Directory.GetFiles(directoryPath, "*.*", SearchOption.AllDirectories)
@@ -100,7 +106,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
         {
             targetDirectory = Path.Combine(repositoryDirectory, repositorySubdirectory);
 
-            if (!Directory.Exists(targetDirectory))
+            if (!await _directoryUtil.Exists(targetDirectory, cancellationToken))
                 throw new DirectoryNotFoundException($"Repository subdirectory was not found: {targetDirectory}");
         }
 
@@ -135,7 +141,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
             string fullPath = Path.GetFullPath(filePath);
 
-            if (!File.Exists(fullPath))
+            if (!await _fileUtil.Exists(fullPath, cancellationToken))
                 throw new FileNotFoundException($"OpenAPI file was not found: {fullPath}", fullPath);
 
             OpenApiDocument? document = await TryLoadDocument(fullPath, cancellationToken).NoSync();
