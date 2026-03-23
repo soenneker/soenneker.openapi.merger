@@ -166,7 +166,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            await using FileStream stream = File.OpenRead(filePath);
+            await using MemoryStream stream = await _fileUtil.ReadToMemoryStream(filePath, log: false, cancellationToken);
             ReadResult readResult = await OpenApiDocument.LoadAsync(stream, GetOpenApiFormat(filePath), new OpenApiReaderSettings(), cancellationToken)
                                                          .NoSync();
             OpenApiDocument? document = readResult.Document;
