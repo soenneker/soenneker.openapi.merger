@@ -42,12 +42,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
         _logger = logger;
         _gitUtil = gitUtil;
     }
-
-    public ValueTask<OpenApiDocument> MergeOpenApis(params (string prefix, string filePath)[] inputs)
-    {
-        return MergeOpenApis(inputs, CancellationToken.None);
-    }
-
+    
     public async ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs,
         CancellationToken cancellationToken = default)
     {

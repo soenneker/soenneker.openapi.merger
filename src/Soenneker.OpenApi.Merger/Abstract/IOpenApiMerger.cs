@@ -13,11 +13,6 @@ public interface IOpenApiMerger
     /// <summary>
     /// Merges the provided OpenAPI files into a single document, prefixing paths by the supplied input prefix.
     /// </summary>
-    ValueTask<OpenApiDocument> MergeOpenApis(params (string prefix, string filePath)[] inputs);
-
-    /// <summary>
-    /// Merges the provided OpenAPI files into a single document, prefixing paths by the supplied input prefix.
-    /// </summary>
     ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs, CancellationToken cancellationToken = default);
 
     /// <summary>
