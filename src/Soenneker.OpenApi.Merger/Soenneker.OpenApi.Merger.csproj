@@ -45,6 +45,6 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
         <PackageReference Include="Microsoft.OpenApi" Version="3.5.1" />
-        <PackageReference Include="Soenneker.Git.Util" Version="4.0.3447" />
+        <PackageReference Include="Soenneker.Git.Util" Version="4.0.3452" />
     </ItemGroup>
 </Project>
