@@ -1,20 +1,19 @@
 using Soenneker.OpenApi.Merger.Abstract;
-using Soenneker.Tests.FixturedUnit;
-using Xunit;
+using Soenneker.Tests.HostedUnit;
 
 namespace Soenneker.OpenApi.Merger.Tests;
 
-[Collection("Collection")]
-public sealed class OpenApiMergerTests : FixturedUnitTest
+[ClassDataSource<Host>(Shared = SharedType.PerTestSession)]
+public sealed class OpenApiMergerTests : HostedUnitTest
 {
     private readonly IOpenApiMerger _util;
 
-    public OpenApiMergerTests(Fixture fixture, ITestOutputHelper output) : base(fixture, output)
+    public OpenApiMergerTests(Host host) : base(host)
     {
         _util = Resolve<IOpenApiMerger>(true);
     }
 
-    [Fact]
+    [Test]
     public void Default()
     {
 
