@@ -56,7 +56,7 @@ jobs:
         run: dotnet build test/Soenneker.OpenApi.Merger.Tests/Soenneker.OpenApi.Merger.Tests.csproj --configuration Release --no-restore --verbosity minimal
 
       - name: Test
-        run: dotnet test test/Soenneker.OpenApi.Merger.Tests/Soenneker.OpenApi.Merger.Tests.csproj --configuration Release --no-build --no-restore --verbosity normal
+        run: dotnet test --project test/Soenneker.OpenApi.Merger.Tests/Soenneker.OpenApi.Merger.Tests.csproj --configuration Release --no-build --no-restore --verbosity normal
 
 
       - name: Restore library
