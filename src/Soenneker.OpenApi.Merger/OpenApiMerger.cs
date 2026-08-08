@@ -15,6 +15,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -129,31 +130,44 @@ public sealed class OpenApiMerger : IOpenApiMerger
             _logger.LogWarning(ex, "EnsureUniqueOperationIds() failed. Continuing with current document.");
         }
 
+        JsonNode? validationRoot = null;
         try
         {
-            EnsureSecuritySchemesResolve(validated);
+            validationRoot = SerializeToJsonNode(validated);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "EnsureSecuritySchemesResolve() failed. Continuing with current document.");
+            _logger.LogWarning(ex, "Unable to create the merged-document validation snapshot.");
         }
 
-        try
+        if (validationRoot is not null)
         {
-            EnsureReferencesResolve(validated);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "EnsureReferencesResolve() failed. Continuing with current document.");
-        }
+            try
+            {
+                EnsureSecuritySchemesResolve(validationRoot);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "EnsureSecuritySchemesResolve() failed. Continuing with current document.");
+            }
 
-        try
-        {
-            EnsureDiscriminatorMappingsResolve(validated);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "EnsureDiscriminatorMappingsResolve() failed. Continuing with current document.");
+            try
+            {
+                EnsureReferencesResolve(validationRoot);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "EnsureReferencesResolve() failed. Continuing with current document.");
+            }
+
+            try
+            {
+                EnsureDiscriminatorMappingsResolve(validationRoot);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "EnsureDiscriminatorMappingsResolve() failed. Continuing with current document.");
+            }
         }
 
         return validated;
@@ -477,7 +491,10 @@ public sealed class OpenApiMerger : IOpenApiMerger
             RewriteSecurityRequirementNames(root, sourceDocument.ComponentRenameMaps);
             NamespaceOperationIds(root, sourceDocument.Prefix);
 
-            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(root.ToJsonString()));
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+                root.WriteTo(writer);
+            stream.Position = 0;
             ReadResult readResult = OpenApiDocument.Load(stream, OpenApiConstants.Json, new OpenApiReaderSettings());
             OpenApiDocument? transformed = readResult.Document;
 
@@ -549,7 +566,9 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
     private OpenApiDocument ValidateMergedDocument(OpenApiDocument merged)
     {
-        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(ToJson(merged)));
+        using var stream = new MemoryStream();
+        WriteJsonToStream(merged, stream);
+        stream.Position = 0;
         ReadResult readResult = OpenApiDocument.Load(stream, OpenApiConstants.Json, new OpenApiReaderSettings());
         OpenApiDocument? document = readResult.Document;
 
@@ -1007,10 +1026,24 @@ public sealed class OpenApiMerger : IOpenApiMerger
             }
         }
     }
-    private void EnsureSecuritySchemesResolve(OpenApiDocument document)
+    private JsonNode SerializeToJsonNode(OpenApiDocument document)
     {
-        JsonNode root = JsonNode.Parse(ToJson(document)) ??
-                        throw new InvalidOperationException("Failed to serialize merged OpenAPI document for security validation.");
+        using var stream = new MemoryStream();
+        WriteJsonToStream(document, stream);
+        stream.Position = 0;
+        return JsonNode.Parse(stream) ?? throw new InvalidOperationException("Failed to serialize merged OpenAPI document for validation.");
+    }
+
+    private static void WriteJsonToStream(OpenApiDocument document, Stream stream)
+    {
+        using var textWriter = new StreamWriter(stream, new UTF8Encoding(false), bufferSize: 16 * 1024, leaveOpen: true);
+        var writer = new OpenApiJsonWriter(textWriter);
+        document.SerializeAsV3(writer);
+        textWriter.Flush();
+    }
+
+    private static void EnsureSecuritySchemesResolve(JsonNode root)
+    {
 
         HashSet<string> schemes = GetComponentNamesFromJson(root, "securitySchemes");
 
@@ -1059,11 +1092,8 @@ public sealed class OpenApiMerger : IOpenApiMerger
         }
     }
 
-    private void EnsureReferencesResolve(OpenApiDocument document)
+    private static void EnsureReferencesResolve(JsonNode root)
     {
-        JsonNode root = JsonNode.Parse(ToJson(document)) ??
-                        throw new InvalidOperationException("Failed to serialize merged OpenAPI document for reference validation.");
-
         Dictionary<string, HashSet<string>> componentNames = GetAllComponentNamesFromJson(root);
 
         ValidateReferencesRecursive(root, componentNames);
@@ -1106,11 +1136,8 @@ public sealed class OpenApiMerger : IOpenApiMerger
         }
     }
 
-    private void EnsureDiscriminatorMappingsResolve(OpenApiDocument document)
+    private static void EnsureDiscriminatorMappingsResolve(JsonNode root)
     {
-        JsonNode root = JsonNode.Parse(ToJson(document)) ??
-                        throw new InvalidOperationException("Failed to serialize merged OpenAPI document for discriminator validation.");
-
         HashSet<string> schemaNames = GetComponentNamesFromJson(root, "schemas");
 
         ValidateDiscriminatorMappingsRecursive(root, schemaNames);
