@@ -13,6 +13,8 @@ public static class OpenApiMergerRegistrar
     /// <summary>
     /// Adds <see cref="IOpenApiMerger"/> as a singleton service. <para/>
     /// </summary>
+    /// <param name="services">Service collection that receives the registration.</param>
+    /// <returns>The same service collection, so additional registrations can be chained.</returns>
     public static IServiceCollection AddOpenApiMergerAsSingleton(this IServiceCollection services)
     {
         services.AddGitUtilAsSingleton();
@@ -24,6 +26,8 @@ public static class OpenApiMergerRegistrar
     /// <summary>
     /// Adds <see cref="IOpenApiMerger"/> as a scoped service. <para/>
     /// </summary>
+    /// <param name="services">Service collection that receives the registration.</param>
+    /// <returns>The same service collection, so additional registrations can be chained.</returns>
     public static IServiceCollection AddOpenApiMergerAsScoped(this IServiceCollection services)
     {
         services.AddGitUtilAsScoped();
