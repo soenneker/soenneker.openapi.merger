@@ -1,10 +1,11 @@
 [![](https://img.shields.io/nuget/v/soenneker.openapi.merger.svg?style=for-the-badge)](https://www.nuget.org/packages/soenneker.openapi.merger/)
 [![](https://img.shields.io/github/actions/workflow/status/soenneker/soenneker.openapi.merger/publish-package.yml?style=for-the-badge)](https://github.com/soenneker/soenneker.openapi.merger/actions/workflows/publish-package.yml)
+[![](https://img.shields.io/github/actions/workflow/status/soenneker/soenneker.openapi.merger/codeql.yml?label=codeql&style=for-the-badge)](https://github.com/soenneker/soenneker.openapi.merger/actions/workflows/codeql.yml)
 [![](https://img.shields.io/nuget/dt/soenneker.openapi.merger.svg?style=for-the-badge)](https://www.nuget.org/packages/soenneker.openapi.merger/)
 
 # Soenneker.OpenApi.Merger
 
-A utility library to merge OpenApi specs.
+Merge OpenAPI JSON or YAML documents while namespacing paths, components, and operation IDs.
 
 ## Install
 
@@ -12,34 +13,60 @@ A utility library to merge OpenApi specs.
 dotnet add package Soenneker.OpenApi.Merger
 ```
 
-## Quick start
+## Registration
 
 ```csharp
-using Soenneker.OpenApi.Merger.Registrars;
 using Microsoft.Extensions.DependencyInjection;
+using Soenneker.OpenApi.Merger.Registrars;
 
-var services = new ServiceCollection();
-var result = services.AddOpenApiMergerAsSingleton();
+services.AddOpenApiMergerAsSingleton();
 ```
 
-Adds `IOpenApiMerger` as a singleton service.
+Use `AddOpenApiMergerAsScoped()` when the merger should follow a dependency-injection scope.
 
-## What you get
+## Merge selected files
 
-- `IOpenApiMerger` — A utility library to merge OpenApi specs.
-- `OpenApiMergerRegistrar` — A utility library to merge OpenApi specs.
+Inject `IOpenApiMerger` and assign a prefix to each source:
 
-## API at a glance
+```csharp
+using Microsoft.OpenApi;
+using Soenneker.OpenApi.Merger.Abstract;
 
-| API | What it does | Result / important behavior |
-| --- | --- | --- |
-| `IOpenApiMerger.MergeOpenApis(inputs, cancellationToken)` | Merges the provided OpenAPI files into a single document, prefixing paths by the supplied input prefix. | A task whose result is the requested openAPI Document. |
-| `IOpenApiMerger.MergeDirectory(directoryPath, cancellationToken)` | Merges every OpenAPI file discovered beneath `directoryPath` into a single document. | A task whose result is the requested openAPI Document. |
-| `IOpenApiMerger.MergeGitUrl(gitUrl, repositorySubdirectory, cancellationToken)` | Clones `gitUrl`, optionally scopes to `repositorySubdirectory`, and merges the discovered OpenAPI files. | A task whose result is the requested openAPI Document. |
-| `IOpenApiMerger.ToJson(document)` | Serializes a merged OpenAPI document as v3 JSON. | Returns `string`. |
-| `OpenApiMergerRegistrar.AddOpenApiMergerAsSingleton(services)` | Adds `IOpenApiMerger` as a singleton service. | The same service collection, so additional registrations can be chained. |
-| `OpenApiMergerRegistrar.AddOpenApiMergerAsScoped(services)` | Adds `IOpenApiMerger` as a scoped service. | The same service collection, so additional registrations can be chained. |
+OpenApiDocument merged = await merger.MergeOpenApis(
+    [
+        ("accounts", "accounts.openapi.json"),
+        ("billing", "billing.openapi.yaml")
+    ],
+    cancellationToken);
 
-## Practical notes
+string json = merger.ToJson(merged);
+```
 
-- Cancellation stops pending work; it does not undo work that has already completed.
+For example, the path `/users` from the `accounts` input becomes `/accounts/users`. If a source path already begins with its prefix, the prefix is not duplicated. Component names and operation IDs are namespaced as needed, and local or relative component references are rewritten to follow renamed components.
+
+`MergeOpenApis` is strict: every listed file must exist and produce a document. A duplicate merged path, duplicate component after renaming, unresolved component reference, missing security scheme, invalid discriminator mapping, or transformation failure throws instead of returning an incomplete document.
+
+## Merge a directory
+
+```csharp
+OpenApiDocument merged = await merger.MergeDirectory(
+    "contracts",
+    cancellationToken);
+```
+
+The directory is searched recursively for `.json`, `.yaml`, and `.yml` files. Files that do not parse as OpenAPI documents are ignored; each included document uses its filename without the extension as its prefix. At least one readable document is required.
+
+## Merge from Git
+
+```csharp
+OpenApiDocument merged = await merger.MergeGitUrl(
+    "https://github.com/example/api-contracts.git",
+    "openapi",
+    cancellationToken);
+```
+
+The optional subdirectory must resolve inside the cloned repository. The same recursive discovery and merge rules as `MergeDirectory` apply.
+
+## Output
+
+`ToJson` serializes the merged document as OpenAPI 3 JSON. The merger returns an in-memory `OpenApiDocument`; it does not write an output file.

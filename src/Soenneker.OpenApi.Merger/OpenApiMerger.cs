@@ -23,7 +23,6 @@ using System.Threading.Tasks;
 
 namespace Soenneker.OpenApi.Merger;
 
-/// <inheritdoc cref="IOpenApiMerger"/>
 public sealed class OpenApiMerger : IOpenApiMerger
 {
     private static readonly string[] _componentSections =
@@ -60,19 +59,8 @@ public sealed class OpenApiMerger : IOpenApiMerger
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            try
-            {
-                sourceDocument.ComponentRenameMaps = BuildComponentRenameMaps(sourceDocument.Prefix, sourceDocument.Document.Components, reservedComponentNames);
-                AddReservedComponentNames(sourceDocument.ComponentRenameMaps, reservedComponentNames);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Skipping component rename preparation for '{FilePath}' (prefix '{Prefix}').",
-                    sourceDocument.FilePath, sourceDocument.Prefix);
-
-                sourceDocument.ComponentRenameMaps = [];
-            }
+            sourceDocument.ComponentRenameMaps = BuildComponentRenameMaps(sourceDocument.Prefix, sourceDocument.Document.Components, reservedComponentNames);
+            AddReservedComponentNames(sourceDocument.ComponentRenameMaps, reservedComponentNames);
         }
 
         Dictionary<string, SourceDocument> sourceLookup = sourceDocuments
@@ -85,90 +73,17 @@ public sealed class OpenApiMerger : IOpenApiMerger
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            try
-            {
-                OpenApiDocument? transformed = await TransformDocument(sourceDocument, sourceLookup, cancellationToken).NoSync();
-
-                if (transformed == null)
-                {
-                    _logger.LogDebug("Skipping '{FilePath}' because transform returned null.", sourceDocument.FilePath);
-                    continue;
-                }
-
-                MergeInto(merged, transformed, sourceDocument.Prefix, _logger);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Skipping source document '{FilePath}' (prefix '{Prefix}') because merge failed.",
-                    sourceDocument.FilePath, sourceDocument.Prefix);
-            }
+            OpenApiDocument transformed = await TransformDocument(sourceDocument, sourceLookup, cancellationToken).NoSync();
+            MergeInto(merged, transformed, sourceDocument.Prefix, _logger);
         }
 
-        OpenApiDocument validated;
+        OpenApiDocument validated = ValidateMergedDocument(merged);
+        EnsureUniqueOperationIds(validated);
 
-        try
-        {
-            validated = ValidateMergedDocument(merged);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "ValidateMergedDocument() failed. Using unvalidated merged document.");
-            validated = merged;
-        }
-
-        try
-        {
-            EnsureUniqueOperationIds(validated);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "EnsureUniqueOperationIds() failed. Continuing with current document.");
-        }
-
-        JsonNode? validationRoot = null;
-        try
-        {
-            validationRoot = SerializeToJsonNode(validated);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Unable to create the merged-document validation snapshot.");
-        }
-
-        if (validationRoot is not null)
-        {
-            try
-            {
-                EnsureSecuritySchemesResolve(validationRoot);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "EnsureSecuritySchemesResolve() failed. Continuing with current document.");
-            }
-
-            try
-            {
-                EnsureReferencesResolve(validationRoot);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "EnsureReferencesResolve() failed. Continuing with current document.");
-            }
-
-            try
-            {
-                EnsureDiscriminatorMappingsResolve(validationRoot);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "EnsureDiscriminatorMappingsResolve() failed. Continuing with current document.");
-            }
-        }
+        JsonNode validationRoot = SerializeToJsonNode(validated);
+        EnsureSecuritySchemesResolve(validationRoot);
+        EnsureReferencesResolve(validationRoot);
+        EnsureDiscriminatorMappingsResolve(validationRoot);
 
         return validated;
     }
@@ -232,7 +147,15 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
         if (!string.IsNullOrWhiteSpace(repositorySubdirectory))
         {
-            targetDirectory = Path.Combine(repositoryDirectory, repositorySubdirectory);
+            string repositoryRoot = Path.GetFullPath(repositoryDirectory);
+            targetDirectory = Path.GetFullPath(Path.Combine(repositoryRoot, repositorySubdirectory));
+            string repositoryRootPrefix = repositoryRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+            if (!targetDirectory.Equals(repositoryRoot, StringComparison.OrdinalIgnoreCase) &&
+                !targetDirectory.StartsWith(repositoryRootPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("The repository subdirectory must remain inside the cloned repository.");
+            }
 
             if (!await _directoryUtil.Exists(targetDirectory, cancellationToken)
                                      .NoSync())
@@ -332,6 +255,10 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
             return document;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Skipping non-OpenAPI file {FilePath}.", filePath);
@@ -382,30 +309,18 @@ public sealed class OpenApiMerger : IOpenApiMerger
                 IOpenApiPathItem? pathItem = kvp.Value;
 
                 if (string.IsNullOrWhiteSpace(pathKey))
-                {
-                    logger.LogDebug("Skipping path with null/empty key from prefix '{Prefix}'.", prefix);
-                    continue;
-                }
+                    throw new InvalidOperationException($"A source document with prefix '{prefix}' contains an empty path key.");
 
                 if (pathItem == null)
-                {
-                    logger.LogDebug("Skipping null path item for '{PathKey}' from prefix '{Prefix}'.", pathKey, prefix);
-                    continue;
-                }
+                    throw new InvalidOperationException($"Path '{pathKey}' from prefix '{prefix}' has no path item.");
 
                 string mergedPath = PrefixPath(prefix, pathKey);
 
                 if (string.IsNullOrWhiteSpace(mergedPath))
-                {
-                    logger.LogDebug("Skipping merged path because PrefixPath returned null/empty for '{PathKey}' and prefix '{Prefix}'.", pathKey, prefix);
-                    continue;
-                }
+                    throw new InvalidOperationException($"Path '{pathKey}' and prefix '{prefix}' produced an empty merged path.");
 
                 if (merged.Paths.ContainsKey(mergedPath))
-                {
-                    logger.LogWarning("Skipping duplicate merged path '{MergedPath}'.", mergedPath);
-                    continue;
-                }
+                    throw new InvalidOperationException($"Multiple source documents produced the merged path '{mergedPath}'.");
 
                 merged.Paths[mergedPath] = pathItem;
             }
@@ -462,28 +377,20 @@ public sealed class OpenApiMerger : IOpenApiMerger
         };
     }
 
-    private ValueTask<OpenApiDocument?> TransformDocument(SourceDocument sourceDocument, Dictionary<string, SourceDocument> sourceLookup,
+    private ValueTask<OpenApiDocument> TransformDocument(SourceDocument sourceDocument, Dictionary<string, SourceDocument> sourceLookup,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
+        cancellationToken.ThrowIfCancellationRequested();
 
             string json = ToJson(sourceDocument.Document);
 
             if (string.IsNullOrWhiteSpace(json))
-            {
-                _logger.LogWarning("Skipping '{FilePath}' because serialized OpenAPI JSON was empty.", sourceDocument.FilePath);
-                return ValueTask.FromResult<OpenApiDocument?>(null);
-            }
+                throw new InvalidOperationException($"Serializing '{sourceDocument.FilePath}' produced empty OpenAPI JSON.");
 
             JsonNode? root = JsonNode.Parse(json);
 
             if (root == null)
-            {
-                _logger.LogWarning("Skipping '{FilePath}' because serialized OpenAPI JSON could not be parsed.", sourceDocument.FilePath);
-                return ValueTask.FromResult<OpenApiDocument?>(null);
-            }
+                throw new InvalidOperationException($"Serialized OpenAPI JSON from '{sourceDocument.FilePath}' could not be parsed.");
 
             RenameComponentKeys(root, sourceDocument.ComponentRenameMaps);
             RewriteComponentReferences(root, sourceDocument, sourceLookup);
@@ -499,24 +406,11 @@ public sealed class OpenApiMerger : IOpenApiMerger
             OpenApiDocument? transformed = readResult.Document;
 
             if (transformed == null)
-            {
-                _logger.LogWarning("Skipping '{FilePath}' because transformed document could not be rehydrated.", sourceDocument.FilePath);
-                return ValueTask.FromResult<OpenApiDocument?>(null);
-            }
+                throw new InvalidOperationException($"Transformed OpenAPI JSON from '{sourceDocument.FilePath}' could not be rehydrated.");
 
             LogDiagnostics("Transformed OpenAPI document", sourceDocument.FilePath, readResult.Diagnostic);
 
-            return ValueTask.FromResult<OpenApiDocument?>(transformed);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Skipping '{FilePath}' because transformation failed.", sourceDocument.FilePath);
-            return ValueTask.FromResult<OpenApiDocument?>(null);
-        }
+        return ValueTask.FromResult(transformed);
     }
 
     private static void CopyComponentSection<T>(IDictionary<string, T>? source, IDictionary<string, T>? destination, string sectionName, ILogger logger)
@@ -530,22 +424,13 @@ public sealed class OpenApiMerger : IOpenApiMerger
             T value = kvp.Value;
 
             if (string.IsNullOrWhiteSpace(key))
-            {
-                logger.LogDebug("Skipping component in '{SectionName}' because key was null/empty.", sectionName);
-                continue;
-            }
+                throw new InvalidOperationException($"Component section '{sectionName}' contains an empty key.");
 
             if (value == null)
-            {
-                logger.LogDebug("Skipping null component '{Key}' in '{SectionName}'.", key, sectionName);
-                continue;
-            }
+                throw new InvalidOperationException($"Component '{key}' in section '{sectionName}' has no value.");
 
             if (destination.ContainsKey(key))
-            {
-                logger.LogWarning("Skipping duplicate component key '{Key}' in '{SectionName}'.", key, sectionName);
-                continue;
-            }
+                throw new InvalidOperationException($"Multiple source documents produced component '{key}' in section '{sectionName}'.");
 
             destination[key] = value;
         }

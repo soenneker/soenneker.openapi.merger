@@ -6,7 +6,7 @@ using Soenneker.OpenApi.Merger.Abstract;
 namespace Soenneker.OpenApi.Merger.Registrars;
 
 /// <summary>
-/// A utility library to merge OpenApi specs
+/// Registers the OpenAPI merger and its file and Git dependencies.
 /// </summary>
 public static class OpenApiMergerRegistrar
 {
