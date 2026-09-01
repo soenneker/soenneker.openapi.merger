@@ -9,6 +9,8 @@ using Soenneker.OpenApi.Merger.Abstract;
 using Soenneker.OpenApi.Merger.Dtos;
 using Soenneker.Utils.Directory.Abstract;
 using Soenneker.Utils.File.Abstract;
+using Soenneker.Utils.PooledStringBuilders;
+using Soenneker.Utils.MemoryStream.Abstract;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -42,13 +44,15 @@ public sealed class OpenApiMerger : IOpenApiMerger
     private readonly IGitUtil _gitUtil;
     private readonly IDirectoryUtil _directoryUtil;
     private readonly IFileUtil _fileUtil;
+    private readonly IMemoryStreamUtil _memoryStreamUtil;
 
-    public OpenApiMerger(ILogger<OpenApiMerger> logger, IGitUtil gitUtil, IDirectoryUtil directoryUtil, IFileUtil fileUtil)
+    public OpenApiMerger(ILogger<OpenApiMerger> logger, IGitUtil gitUtil, IDirectoryUtil directoryUtil, IFileUtil fileUtil, IMemoryStreamUtil memoryStreamUtil)
     {
         _logger = logger;
         _gitUtil = gitUtil;
         _directoryUtil = directoryUtil;
         _fileUtil = fileUtil;
+        _memoryStreamUtil = memoryStreamUtil;
     }
 
     private async ValueTask<OpenApiDocument> MergeSourceDocuments(List<SourceDocument> sourceDocuments, CancellationToken cancellationToken)
@@ -398,7 +402,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
             RewriteSecurityRequirementNames(root, sourceDocument.ComponentRenameMaps);
             NamespaceOperationIds(root, sourceDocument.Prefix);
 
-            using var stream = new MemoryStream();
+            using MemoryStream stream = _memoryStreamUtil.GetSync(cancellationToken);
             using (var writer = new Utf8JsonWriter(stream))
                 root.WriteTo(writer);
             stream.Position = 0;
@@ -451,7 +455,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
     private OpenApiDocument ValidateMergedDocument(OpenApiDocument merged)
     {
-        using var stream = new MemoryStream();
+        using MemoryStream stream = _memoryStreamUtil.GetSync();
         WriteJsonToStream(merged, stream);
         stream.Position = 0;
         ReadResult readResult = OpenApiDocument.Load(stream, OpenApiConstants.Json, new OpenApiReaderSettings());
@@ -913,7 +917,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
     }
     private JsonNode SerializeToJsonNode(OpenApiDocument document)
     {
-        using var stream = new MemoryStream();
+        using MemoryStream stream = _memoryStreamUtil.GetSync();
         WriteJsonToStream(document, stream);
         stream.Position = 0;
         return JsonNode.Parse(stream) ?? throw new InvalidOperationException("Failed to serialize merged OpenAPI document for validation.");
@@ -1144,7 +1148,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
         if (string.IsNullOrWhiteSpace(value))
             return "default";
 
-        var sb = new StringBuilder(value.Length);
+        using var sb = new PooledStringBuilder(value.Length);
         bool lastWasUnderscore = false;
 
         foreach (char ch in value)
