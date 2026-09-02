@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.OpenApi;
 using Soenneker.OpenApi.Merger.Abstract;
@@ -24,7 +25,7 @@ public sealed class OpenApiMergerTests : HostedUnitTest
     }
 
     [Test]
-    public async ValueTask MergeOpenApis_namespaces_paths_and_rejects_collisions()
+    public async ValueTask MergeOpenApis_namespaces_paths_and_rejects_collisions(CancellationToken cancellationToken)
     {
         string firstPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.json");
         string secondPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.json");
@@ -49,7 +50,7 @@ public sealed class OpenApiMergerTests : HostedUnitTest
             await File.WriteAllTextAsync(firstPath, document);
             await File.WriteAllTextAsync(secondPath, document);
 
-            OpenApiDocument merged = await _util.MergeOpenApis([("accounts", firstPath), ("billing", secondPath)]);
+            OpenApiDocument merged = await _util.MergeOpenApis([("accounts", firstPath), ("billing", secondPath)], cancellationToken: cancellationToken);
 
             await Assert.That(merged.Paths.ContainsKey("/accounts/users")).IsTrue();
             await Assert.That(merged.Paths.ContainsKey("/billing/users")).IsTrue();
@@ -58,7 +59,7 @@ public sealed class OpenApiMergerTests : HostedUnitTest
 
             try
             {
-                await _util.MergeOpenApis([("accounts", firstPath), ("accounts", secondPath)]);
+                await _util.MergeOpenApis([("accounts", firstPath), ("accounts", secondPath)], cancellationToken: cancellationToken);
             }
             catch (InvalidOperationException)
             {
