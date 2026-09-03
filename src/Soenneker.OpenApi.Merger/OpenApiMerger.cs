@@ -11,6 +11,7 @@ using Soenneker.Utils.Directory.Abstract;
 using Soenneker.Utils.File.Abstract;
 using Soenneker.Utils.PooledStringBuilders;
 using Soenneker.Utils.MemoryStream.Abstract;
+using Soenneker.Utils.Yaml.Abstract;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -45,14 +46,17 @@ public sealed class OpenApiMerger : IOpenApiMerger
     private readonly IDirectoryUtil _directoryUtil;
     private readonly IFileUtil _fileUtil;
     private readonly IMemoryStreamUtil _memoryStreamUtil;
+    private readonly IYamlUtil _yamlUtil;
 
-    public OpenApiMerger(ILogger<OpenApiMerger> logger, IGitUtil gitUtil, IDirectoryUtil directoryUtil, IFileUtil fileUtil, IMemoryStreamUtil memoryStreamUtil)
+    public OpenApiMerger(ILogger<OpenApiMerger> logger, IGitUtil gitUtil, IDirectoryUtil directoryUtil, IFileUtil fileUtil, IMemoryStreamUtil memoryStreamUtil,
+        IYamlUtil yamlUtil)
     {
         _logger = logger;
         _gitUtil = gitUtil;
         _directoryUtil = directoryUtil;
         _fileUtil = fileUtil;
         _memoryStreamUtil = memoryStreamUtil;
+        _yamlUtil = yamlUtil;
     }
 
     private async ValueTask<OpenApiDocument> MergeSourceDocuments(List<SourceDocument> sourceDocuments, CancellationToken cancellationToken)
@@ -72,13 +76,14 @@ public sealed class OpenApiMerger : IOpenApiMerger
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.OrdinalIgnoreCase);
 
         OpenApiDocument merged = CreateMergedDocument();
+        var operationSignatures = new Dictionary<(string Path, HttpMethod Method), JsonNode>();
 
         foreach (SourceDocument sourceDocument in sourceDocuments)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             OpenApiDocument transformed = await TransformDocument(sourceDocument, sourceLookup, cancellationToken).NoSync();
-            MergeInto(merged, transformed, sourceDocument.Prefix, _logger);
+            MergeInto(merged, transformed, sourceDocument.Document, sourceDocument.Prefix, operationSignatures, _logger);
         }
 
         OpenApiDocument validated = ValidateMergedDocument(merged);
@@ -86,10 +91,11 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
         JsonNode validationRoot = SerializeToJsonNode(validated);
         EnsureSecuritySchemesResolve(validationRoot);
+        RepairUnresolvedSchemaReferences(validationRoot);
         EnsureReferencesResolve(validationRoot);
         EnsureDiscriminatorMappingsResolve(validationRoot);
 
-        return validated;
+        return RehydrateJsonNode(validationRoot);
     }
 
     public async ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs, CancellationToken cancellationToken = default)
@@ -221,10 +227,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        await using MemoryStream stream = await _fileUtil.ReadToMemoryStream(filePath, log: false, cancellationToken)
-                                                         .NoSync();
-        ReadResult readResult = await OpenApiDocument.LoadAsync(stream, GetOpenApiFormat(filePath), new OpenApiReaderSettings(), cancellationToken)
-                                                     .NoSync();
+        ReadResult readResult = await LoadDocument(filePath, cancellationToken).NoSync();
 
         OpenApiDocument? document = readResult.Document;
 
@@ -242,10 +245,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            await using MemoryStream stream = await _fileUtil.ReadToMemoryStream(filePath, log: false, cancellationToken)
-                                                             .NoSync();
-            ReadResult readResult = await OpenApiDocument.LoadAsync(stream, GetOpenApiFormat(filePath), new OpenApiReaderSettings(), cancellationToken)
-                                                         .NoSync();
+            ReadResult readResult = await LoadDocument(filePath, cancellationToken).NoSync();
 
             OpenApiDocument? document = readResult.Document;
 
@@ -270,8 +270,76 @@ public sealed class OpenApiMerger : IOpenApiMerger
         }
     }
 
-    private static void MergeInto(OpenApiDocument merged, OpenApiDocument sourceDocument, string prefix, ILogger logger)
+    private async ValueTask<ReadResult> LoadDocument(string filePath, CancellationToken cancellationToken)
     {
+        if (IsYamlFile(filePath))
+        {
+            string yaml = await _fileUtil.Read(filePath, log: false, cancellationToken).NoSync();
+            string json = _yamlUtil.YamlToJson(yaml) ?? throw new InvalidOperationException($"Failed to convert YAML OpenAPI document '{filePath}' to JSON.");
+            await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json), writable: false);
+            return await OpenApiDocument.LoadAsync(stream, OpenApiConstants.Json, new OpenApiReaderSettings(), cancellationToken).NoSync();
+        }
+
+        string sourceJson = await _fileUtil.Read(filePath, log: false, cancellationToken).NoSync();
+        string normalizedJson = EscapeUnescapedJsonControlCharacters(sourceJson);
+        await using var jsonStream = new MemoryStream(Encoding.UTF8.GetBytes(normalizedJson), writable: false);
+        return await OpenApiDocument.LoadAsync(jsonStream, OpenApiConstants.Json, new OpenApiReaderSettings(), cancellationToken).NoSync();
+    }
+
+    private static string EscapeUnescapedJsonControlCharacters(string json)
+    {
+        StringBuilder? builder = null;
+        bool inString = false;
+        bool escaped = false;
+
+        for (int i = 0; i < json.Length; i++)
+        {
+            char value = json[i];
+            bool invalidControl = value < ' ' && value is not '\r' and not '\n' and not '\t';
+
+            if (invalidControl)
+            {
+                builder ??= new StringBuilder(json.Length + 8).Append(json, 0, i);
+                if (inString)
+                    builder.Append("\\u").Append(((int)value).ToString("X4"));
+                continue;
+            }
+
+            builder?.Append(value);
+
+            if (!inString)
+            {
+                if (value == '"')
+                    inString = true;
+                continue;
+            }
+
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (value == '\\')
+                escaped = true;
+            else if (value == '"')
+                inString = false;
+        }
+
+        return builder?.ToString() ?? json;
+    }
+
+    private static bool IsYamlFile(string filePath)
+    {
+        string extension = Path.GetExtension(filePath);
+        return extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase) || extension.Equals(".yml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void MergeInto(OpenApiDocument merged, OpenApiDocument sourceDocument, OpenApiDocument originalDocument, string prefix,
+        Dictionary<(string Path, HttpMethod Method), JsonNode> operationSignatures, ILogger logger)
+    {
+        JsonNode originalRoot = SerializeToJsonNode(originalDocument);
+
         if (merged == null || sourceDocument == null)
             return;
 
@@ -323,10 +391,16 @@ public sealed class OpenApiMerger : IOpenApiMerger
                 if (string.IsNullOrWhiteSpace(mergedPath))
                     throw new InvalidOperationException($"Path '{pathKey}' and prefix '{prefix}' produced an empty merged path.");
 
-                if (merged.Paths.ContainsKey(mergedPath))
-                    throw new InvalidOperationException($"Multiple source documents produced the merged path '{mergedPath}'.");
+                IOpenApiPathItem? originalPathItem = null;
+                originalDocument.Paths?.TryGetValue(pathKey, out originalPathItem);
 
-                merged.Paths[mergedPath] = pathItem;
+                if (merged.Paths.TryGetValue(mergedPath, out IOpenApiPathItem? existingPathItem))
+                    MergePathItems(existingPathItem, pathItem, originalPathItem, originalRoot, mergedPath, operationSignatures, logger);
+                else
+                {
+                    merged.Paths[mergedPath] = pathItem;
+                    RegisterOperationSignatures(pathItem, originalPathItem, originalRoot, mergedPath, operationSignatures);
+                }
             }
         }
 
@@ -352,6 +426,201 @@ public sealed class OpenApiMerger : IOpenApiMerger
         CopyComponentSection(sourceDocument.Components?.Links, mergedComponents.Links, "links", logger);
         CopyComponentSection(sourceDocument.Components?.Callbacks, mergedComponents.Callbacks, "callbacks", logger);
         CopyComponentSection(sourceDocument.Components?.Examples, mergedComponents.Examples, "examples", logger);
+    }
+
+    private static void MergePathItems(IOpenApiPathItem target, IOpenApiPathItem candidate, IOpenApiPathItem? originalCandidate, JsonNode originalRoot,
+        string path, Dictionary<(string Path, HttpMethod Method), JsonNode> operationSignatures, ILogger logger)
+    {
+        if (candidate.Operations == null || candidate.Operations.Count == 0)
+            return;
+
+        IDictionary<HttpMethod, OpenApiOperation> targetOperations = target.Operations ??
+                                                                     throw new InvalidOperationException($"Path '{path}' has no operations collection.");
+
+        foreach ((HttpMethod method, OpenApiOperation candidateOperation) in candidate.Operations)
+        {
+            if (!targetOperations.TryGetValue(method, out OpenApiOperation? targetOperation))
+            {
+                targetOperations[method] = candidateOperation;
+                OpenApiOperation signatureOperation = GetOperation(originalCandidate, method) ?? candidateOperation;
+                operationSignatures[(path, method)] = SerializeOperationForComparison(signatureOperation, originalRoot);
+                continue;
+            }
+
+            JsonNode targetSignature = operationSignatures.TryGetValue((path, method), out JsonNode? existingSignature)
+                ? existingSignature
+                : SerializeOperationForComparison(targetOperation);
+            OpenApiOperation candidateSignatureOperation = GetOperation(originalCandidate, method) ?? candidateOperation;
+            JsonNode candidateSignature = SerializeOperationForComparison(candidateSignatureOperation, originalRoot);
+
+            if (!JsonNode.DeepEquals(targetSignature, candidateSignature))
+                throw new InvalidOperationException($"Multiple source documents produced different operations for '{method} {path}'.");
+
+            MergeOperationDocumentation(targetOperation, candidateOperation);
+            logger.LogInformation("Deduplicated equivalent operation '{Method} {Path}'.", method, path);
+        }
+    }
+
+    private static void RegisterOperationSignatures(IOpenApiPathItem transformedPathItem, IOpenApiPathItem? originalPathItem, JsonNode originalRoot,
+        string path, Dictionary<(string Path, HttpMethod Method), JsonNode> operationSignatures)
+    {
+        if (transformedPathItem.Operations == null)
+            return;
+
+        foreach ((HttpMethod method, OpenApiOperation transformedOperation) in transformedPathItem.Operations)
+        {
+            OpenApiOperation signatureOperation = GetOperation(originalPathItem, method) ?? transformedOperation;
+            operationSignatures[(path, method)] = SerializeOperationForComparison(signatureOperation, originalRoot);
+        }
+    }
+
+    private static OpenApiOperation? GetOperation(IOpenApiPathItem? pathItem, HttpMethod method)
+    {
+        return pathItem?.Operations != null && pathItem.Operations.TryGetValue(method, out OpenApiOperation? operation) ? operation : null;
+    }
+
+    private static JsonNode SerializeOperationForComparison(OpenApiOperation operation, JsonNode? originalRoot = null)
+    {
+        using var stringWriter = new StringWriter(new StringBuilder(1024));
+        var writer = new OpenApiJsonWriter(stringWriter);
+        operation.SerializeAsV3(writer);
+
+        JsonNode root = ParseJsonRemovingDuplicateProperties(stringWriter.ToString()) ??
+                        throw new InvalidOperationException("Failed to serialize an OpenAPI operation.");
+        NormalizeOperationForComparison(root);
+
+        if (originalRoot?["components"] is not JsonObject components)
+            return root;
+
+        var referencedComponents = new JsonObject();
+        var visitedReferences = new HashSet<string>(StringComparer.Ordinal);
+        CollectReferencedComponents(root, components, referencedComponents, visitedReferences);
+        CollectReferencedSecuritySchemes(root, components, referencedComponents, visitedReferences);
+
+        return new JsonObject
+        {
+            ["operation"] = root,
+            ["components"] = referencedComponents
+        };
+    }
+
+    private static void CollectReferencedComponents(JsonNode node, JsonObject components, JsonObject collected, HashSet<string> visited)
+    {
+        if (node is JsonObject jsonObject)
+        {
+            if (jsonObject["$ref"] is JsonValue referenceValue && referenceValue.TryGetValue(out string? reference) &&
+                !string.IsNullOrWhiteSpace(reference) && TryParseComponentReference(reference, out string section, out string encodedName, out _))
+            {
+                AddReferencedComponent(section, DecodeJsonPointerSegment(encodedName), components, collected, visited);
+            }
+
+            foreach (JsonNode? child in jsonObject.Select(static property => property.Value))
+            {
+                if (child != null)
+                    CollectReferencedComponents(child, components, collected, visited);
+            }
+        }
+        else if (node is JsonArray jsonArray)
+        {
+            foreach (JsonNode? child in jsonArray)
+            {
+                if (child != null)
+                    CollectReferencedComponents(child, components, collected, visited);
+            }
+        }
+    }
+
+    private static void CollectReferencedSecuritySchemes(JsonNode operation, JsonObject components, JsonObject collected, HashSet<string> visited)
+    {
+        if (operation["security"] is not JsonArray securityRequirements)
+            return;
+
+        foreach (JsonObject requirement in securityRequirements.OfType<JsonObject>())
+        {
+            foreach (string schemeName in requirement.Select(static property => property.Key))
+            {
+                AddReferencedComponent("securitySchemes", schemeName, components, collected, visited);
+            }
+        }
+    }
+
+    private static void AddReferencedComponent(string section, string name, JsonObject components, JsonObject collected, HashSet<string> visited)
+    {
+        string referenceKey = $"{section}/{name}";
+
+        if (!visited.Add(referenceKey) || components[section] is not JsonObject sectionComponents || sectionComponents[name] is not JsonNode component)
+            return;
+
+        JsonNode normalizedComponent = component.DeepClone();
+        NormalizeOperationForComparison(normalizedComponent);
+        collected[referenceKey] = normalizedComponent;
+        CollectReferencedComponents(normalizedComponent, components, collected, visited);
+    }
+
+    private static void NormalizeOperationForComparison(JsonNode node)
+    {
+        switch (node)
+        {
+            case JsonObject jsonObject:
+                jsonObject.Remove("summary");
+                jsonObject.Remove("description");
+                jsonObject.Remove("externalDocs");
+                jsonObject.Remove("example");
+                jsonObject.Remove("examples");
+
+                foreach (JsonNode? child in jsonObject.Select(static property => property.Value).ToList())
+                {
+                    if (child != null)
+                        NormalizeOperationForComparison(child);
+                }
+                break;
+            case JsonArray jsonArray:
+                foreach (JsonNode? child in jsonArray)
+                {
+                    if (child != null)
+                        NormalizeOperationForComparison(child);
+                }
+                break;
+        }
+    }
+
+    private static void MergeOperationDocumentation(OpenApiOperation target, OpenApiOperation candidate)
+    {
+        target.Summary = PreferRicherText(target.Summary, candidate.Summary);
+        target.Description = PreferRicherText(target.Description, candidate.Description);
+
+        if (target.Parameters != null && candidate.Parameters != null)
+        {
+            foreach (IOpenApiParameter targetParameter in target.Parameters)
+            {
+                IOpenApiParameter? candidateParameter = candidate.Parameters.FirstOrDefault(parameter =>
+                    string.Equals(parameter.Name, targetParameter.Name, StringComparison.Ordinal) && parameter.In == targetParameter.In);
+
+                if (candidateParameter != null)
+                    targetParameter.Description = PreferRicherText(targetParameter.Description, candidateParameter.Description);
+            }
+        }
+
+        if (target.Responses != null && candidate.Responses != null)
+        {
+            foreach ((string statusCode, IOpenApiResponse targetResponse) in target.Responses)
+            {
+                if (targetResponse is OpenApiResponse concreteTarget && candidate.Responses.TryGetValue(statusCode, out IOpenApiResponse? candidateResponse) &&
+                    candidateResponse is OpenApiResponse concreteCandidate)
+                {
+                    concreteTarget.Description = PreferRicherText(concreteTarget.Description, concreteCandidate.Description);
+                }
+            }
+        }
+    }
+
+    private static string? PreferRicherText(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first))
+            return second;
+        if (string.IsNullOrWhiteSpace(second))
+            return first;
+        return second.Length > first.Length ? second : first;
     }
 
     private static OpenApiDocument CreateMergedDocument()
@@ -391,7 +660,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
             if (string.IsNullOrWhiteSpace(json))
                 throw new InvalidOperationException($"Serializing '{sourceDocument.FilePath}' produced empty OpenAPI JSON.");
 
-            JsonNode? root = JsonNode.Parse(json);
+            JsonNode? root = ParseJsonRemovingDuplicateProperties(json);
 
             if (root == null)
                 throw new InvalidOperationException($"Serialized OpenAPI JSON from '{sourceDocument.FilePath}' could not be parsed.");
@@ -415,6 +684,41 @@ public sealed class OpenApiMerger : IOpenApiMerger
             LogDiagnostics("Transformed OpenAPI document", sourceDocument.FilePath, readResult.Diagnostic);
 
         return ValueTask.FromResult(transformed);
+    }
+
+    private static JsonNode? ParseJsonRemovingDuplicateProperties(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(EscapeUnescapedJsonControlCharacters(json),
+            new JsonDocumentOptions { AllowDuplicateProperties = true });
+        return ConvertElement(document.RootElement);
+
+        static JsonNode? ConvertElement(JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    var result = new JsonObject();
+                    foreach (JsonProperty property in element.EnumerateObject())
+                        result[property.Name] = ConvertElement(property.Value);
+                    return result;
+                case JsonValueKind.Array:
+                    var array = new JsonArray();
+                    foreach (JsonElement item in element.EnumerateArray())
+                        array.Add(ConvertElement(item));
+                    return array;
+                case JsonValueKind.String:
+                    return JsonValue.Create(element.GetString());
+                case JsonValueKind.Number:
+                case JsonValueKind.True:
+                case JsonValueKind.False:
+                    return JsonNode.Parse(element.GetRawText());
+                case JsonValueKind.Null:
+                case JsonValueKind.Undefined:
+                    return null;
+                default:
+                    throw new InvalidOperationException($"Unsupported JSON value kind '{element.ValueKind}'.");
+            }
+        }
     }
 
     private static void CopyComponentSection<T>(IDictionary<string, T>? source, IDictionary<string, T>? destination, string sectionName, ILogger logger)
@@ -455,9 +759,8 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
     private OpenApiDocument ValidateMergedDocument(OpenApiDocument merged)
     {
-        using MemoryStream stream = _memoryStreamUtil.GetSync();
-        WriteJsonToStream(merged, stream);
-        stream.Position = 0;
+        string json = EscapeUnescapedJsonControlCharacters(ToJson(merged));
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json), writable: false);
         ReadResult readResult = OpenApiDocument.Load(stream, OpenApiConstants.Json, new OpenApiReaderSettings());
         OpenApiDocument? document = readResult.Document;
 
@@ -917,18 +1220,19 @@ public sealed class OpenApiMerger : IOpenApiMerger
     }
     private JsonNode SerializeToJsonNode(OpenApiDocument document)
     {
-        using MemoryStream stream = _memoryStreamUtil.GetSync();
-        WriteJsonToStream(document, stream);
-        stream.Position = 0;
-        return JsonNode.Parse(stream) ?? throw new InvalidOperationException("Failed to serialize merged OpenAPI document for validation.");
+        return ParseJsonRemovingDuplicateProperties(ToJson(document)) ??
+               throw new InvalidOperationException("Failed to serialize merged OpenAPI document for validation.");
     }
 
-    private static void WriteJsonToStream(OpenApiDocument document, Stream stream)
+    private OpenApiDocument RehydrateJsonNode(JsonNode root)
     {
-        using var textWriter = new StreamWriter(stream, new UTF8Encoding(false), bufferSize: 16 * 1024, leaveOpen: true);
-        var writer = new OpenApiJsonWriter(textWriter);
-        document.SerializeAsV3(writer);
-        textWriter.Flush();
+        using MemoryStream stream = _memoryStreamUtil.GetSync();
+        using (var writer = new Utf8JsonWriter(stream))
+            root.WriteTo(writer);
+        stream.Position = 0;
+
+        ReadResult readResult = OpenApiDocument.Load(stream, OpenApiConstants.Json, new OpenApiReaderSettings());
+        return readResult.Document ?? throw new InvalidOperationException("Failed to rehydrate normalized merged OpenAPI JSON.");
     }
 
     private static void EnsureSecuritySchemesResolve(JsonNode root)
@@ -986,6 +1290,44 @@ public sealed class OpenApiMerger : IOpenApiMerger
         Dictionary<string, HashSet<string>> componentNames = GetAllComponentNamesFromJson(root);
 
         ValidateReferencesRecursive(root, componentNames);
+    }
+
+    private void RepairUnresolvedSchemaReferences(JsonNode root)
+    {
+        Dictionary<string, HashSet<string>> componentNames = GetAllComponentNamesFromJson(root);
+        Repair(root);
+
+        void Repair(JsonNode node)
+        {
+            switch (node)
+            {
+                case JsonObject jsonObject:
+                    if (jsonObject.TryGetPropertyValue("$ref", out JsonNode? refNode) && refNode is JsonValue refValue &&
+                        refValue.TryGetValue(out string? reference) && !string.IsNullOrWhiteSpace(reference) &&
+                        TryParseComponentReference(reference, out string section, out string encodedName, out _) &&
+                        section.Equals("schemas", StringComparison.Ordinal) &&
+                        (!componentNames.TryGetValue(section, out HashSet<string>? schemas) || !schemas.Contains(DecodeJsonPointerSegment(encodedName))))
+                    {
+                        jsonObject.Remove("$ref");
+                        jsonObject.TryAdd("type", "object");
+                        _logger.LogWarning("Replaced unresolved schema reference '{Reference}' with an object schema.", reference);
+                    }
+
+                    foreach ((_, JsonNode? child) in jsonObject.ToList())
+                    {
+                        if (child != null)
+                            Repair(child);
+                    }
+                    break;
+                case JsonArray jsonArray:
+                    foreach (JsonNode? child in jsonArray)
+                    {
+                        if (child != null)
+                            Repair(child);
+                    }
+                    break;
+            }
+        }
     }
 
     private static void ValidateReferencesRecursive(JsonNode node, Dictionary<string, HashSet<string>> componentNames)
@@ -1192,16 +1534,4 @@ public sealed class OpenApiMerger : IOpenApiMerger
                       .Replace("~0", "~", StringComparison.Ordinal);
     }
 
-    private static string GetOpenApiFormat(string filePath)
-    {
-        string extension = Path.GetExtension(filePath);
-
-        return extension.ToLowerInvariant() switch
-        {
-            ".json" => OpenApiConstants.Json,
-            ".yaml" => OpenApiConstants.Yaml,
-            ".yml" => OpenApiConstants.Yml,
-            _ => throw new InvalidOperationException($"Unsupported OpenAPI file extension: {extension}")
-        };
-    }
 }

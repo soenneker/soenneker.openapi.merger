@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Soenneker.Git.Util.Registrars;
 using Soenneker.OpenApi.Merger.Abstract;
 using Soenneker.Utils.MemoryStream.Registrars;
+using Soenneker.Utils.Yaml.Registrars;
 
 namespace Soenneker.OpenApi.Merger.Registrars;
 
@@ -20,6 +21,7 @@ public static class OpenApiMergerRegistrar
     {
         services.AddGitUtilAsSingleton();
         services.AddMemoryStreamUtilAsSingleton();
+        services.AddYamlUtilAsSingleton();
         services.TryAddSingleton<IOpenApiMerger, OpenApiMerger>();
 
         return services;
@@ -34,6 +36,7 @@ public static class OpenApiMergerRegistrar
     {
         services.AddGitUtilAsScoped();
         services.AddMemoryStreamUtilAsScoped();
+        services.AddYamlUtilAsScoped();
         services.TryAddScoped<IOpenApiMerger, OpenApiMerger>();
 
         return services;

@@ -45,5 +45,6 @@
         <PackageReference Include="Soenneker.Git.Util" Version="4.0.3719" />
         <PackageReference Include="Soenneker.Utils.PooledStringBuilders" Version="4.0.29" />
         <PackageReference Include="Soenneker.Utils.MemoryStream" Version="4.0.1527" />
+        <PackageReference Include="Soenneker.Utils.Yaml" Version="4.0.156" />
     </ItemGroup>
 </Project>
