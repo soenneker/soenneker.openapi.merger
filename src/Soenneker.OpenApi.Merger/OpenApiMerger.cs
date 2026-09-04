@@ -26,6 +26,7 @@ using System.Threading.Tasks;
 
 namespace Soenneker.OpenApi.Merger;
 
+/// <inheritdoc cref="IOpenApiMerger" />
 public sealed class OpenApiMerger : IOpenApiMerger
 {
     private static readonly string[] _componentSections =
