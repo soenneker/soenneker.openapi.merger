@@ -569,7 +569,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
                 jsonObject.Remove("example");
                 jsonObject.Remove("examples");
 
-                foreach (JsonNode? child in jsonObject.Select(static property => property.Value).ToList())
+                foreach ((_, JsonNode? child) in jsonObject)
                 {
                     if (child != null)
                         NormalizeOperationForComparison(child);
@@ -712,7 +712,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
                 case JsonValueKind.Number:
                 case JsonValueKind.True:
                 case JsonValueKind.False:
-                    return JsonNode.Parse(element.GetRawText());
+                    return JsonValue.Create(element.Clone());
                 case JsonValueKind.Null:
                 case JsonValueKind.Undefined:
                     return null;
@@ -894,7 +894,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
                     jsonObject["$ref"] = RewriteReference(reference, currentSource, sourceLookup);
                 }
 
-                foreach ((_, JsonNode? child) in jsonObject.ToList())
+                foreach ((_, JsonNode? child) in jsonObject)
                 {
                     if (child != null)
                         RewriteComponentReferences(child, currentSource, sourceLookup);
@@ -924,8 +924,9 @@ public sealed class OpenApiMerger : IOpenApiMerger
                 if (jsonObject.TryGetPropertyValue("discriminator", out JsonNode? discriminatorNode) && discriminatorNode is JsonObject discriminatorObject &&
                     discriminatorObject["mapping"] is JsonObject mappingObject)
                 {
-                    foreach ((string mappingKey, JsonNode? mappingValueNode) in mappingObject.ToList())
+                    for (var mappingIndex = 0; mappingIndex < mappingObject.Count; mappingIndex++)
                     {
+                        (string mappingKey, JsonNode? mappingValueNode) = mappingObject.GetAt(mappingIndex);
                         if (mappingValueNode is JsonValue mappingValue && mappingValue.TryGetValue(out string? mappingValueString) &&
                             !string.IsNullOrWhiteSpace(mappingValueString))
                         {
@@ -934,7 +935,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
                     }
                 }
 
-                foreach ((_, JsonNode? child) in jsonObject.ToList())
+                foreach ((_, JsonNode? child) in jsonObject)
                 {
                     if (child != null)
                         RewriteDiscriminatorMappings(child, currentSource, sourceLookup);
@@ -969,7 +970,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
                     RewriteSecurityRequirementArray(securityArray, securityRenameMap);
                 }
 
-                foreach ((_, JsonNode? child) in jsonObject.ToList())
+                foreach ((_, JsonNode? child) in jsonObject)
                 {
                     if (child != null)
                         RewriteSecurityRequirementNames(child, renameMaps);
@@ -999,7 +1000,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
 
             var replacements = new List<(string oldKey, string newKey, JsonNode? value)>();
 
-            foreach ((string schemeName, JsonNode? value) in requirementObject.ToList())
+            foreach ((string schemeName, JsonNode? value) in requirementObject)
             {
                 if (!securityRenameMap.TryGetValue(schemeName, out string? renamedScheme) || string.Equals(schemeName, renamedScheme, StringComparison.Ordinal))
                     continue;
@@ -1314,7 +1315,7 @@ public sealed class OpenApiMerger : IOpenApiMerger
                         _logger.LogWarning("Replaced unresolved schema reference '{Reference}' with an object schema.", reference);
                     }
 
-                    foreach ((_, JsonNode? child) in jsonObject.ToList())
+                    foreach ((_, JsonNode? child) in jsonObject)
                     {
                         if (child != null)
                             Repair(child);
