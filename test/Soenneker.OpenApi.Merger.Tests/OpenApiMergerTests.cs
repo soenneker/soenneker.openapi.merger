@@ -20,6 +20,64 @@ public sealed class OpenApiMergerTests : HostedUnitTest
     }
 
     [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async ValueTask MergeOpenApis_compares_renamed_recursive_schemas_and_security(bool differentSchema, bool differentSecurity, CancellationToken cancellationToken)
+    {
+        string firstPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.json");
+        string secondPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.json");
+        const string document = """
+            {
+              "openapi": "3.0.3", "info": { "title": "Example", "version": "1" },
+              "paths": { "/users": { "get": {
+                "operationId": "list", "tags": ["Basic"], "security": [{"oauth": ["read"]}],
+                "responses": { "200": { "description": "OK", "content": { "application/json": {
+                  "schema": { "$ref": "#/components/schemas/User" }
+                } } } }
+              } } },
+              "components": {
+                "schemas": { "User": { "type": "object", "properties": {
+                  "value": {"type": "string"}, "next": {"$ref": "#/components/schemas/User"}
+                } } },
+                "securitySchemes": { "oauth": { "type": "oauth2", "flows": { "clientCredentials": {
+                  "tokenUrl": "https://example.com/token", "scopes": {"read": "Read access", "unused": "Other endpoint"}
+                } } } }
+              }
+            }
+            """;
+        string renamed = document.Replace("User", "User_1", StringComparison.Ordinal)
+            .Replace("\"list\"", "\"getPage\"", StringComparison.Ordinal)
+            .Replace("\"Basic\"", "\"Details\"", StringComparison.Ordinal)
+            .Replace(", \"unused\": \"Other endpoint\"", "", StringComparison.Ordinal);
+        if (differentSchema)
+            renamed = renamed.Replace("\"type\": \"string\"", "\"type\": \"integer\"", StringComparison.Ordinal);
+        if (differentSecurity)
+            renamed = renamed.Replace("[\"read\"]", "[\"write\"]", StringComparison.Ordinal);
+        try
+        {
+            await File.WriteAllTextAsync(firstPath, document, cancellationToken);
+            await File.WriteAllTextAsync(secondPath, renamed, cancellationToken);
+            bool collisionThrown = false;
+            try
+            {
+                OpenApiDocument merged = await _util.MergeOpenApis([("api", firstPath), ("api", secondPath)], cancellationToken);
+                await Assert.That(merged.Paths["/api/users"].Operations!.Count).IsEqualTo(1);
+            }
+            catch (InvalidOperationException)
+            {
+                collisionThrown = true;
+            }
+            await Assert.That(collisionThrown).IsEqualTo(differentSchema || differentSecurity);
+        }
+        finally
+        {
+            File.Delete(firstPath);
+            File.Delete(secondPath);
+        }
+    }
+
+    [Test]
     public void Default()
     {
 

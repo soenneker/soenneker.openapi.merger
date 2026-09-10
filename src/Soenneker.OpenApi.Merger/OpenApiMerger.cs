@@ -26,7 +26,6 @@ using System.Threading.Tasks;
 
 namespace Soenneker.OpenApi.Merger;
 
-/// <inheritdoc cref="IOpenApiMerger" />
 public sealed class OpenApiMerger : IOpenApiMerger
 {
     private static readonly string[] _componentSections =
@@ -489,6 +488,9 @@ public sealed class OpenApiMerger : IOpenApiMerger
         JsonNode root = ParseJsonRemovingDuplicateProperties(stringWriter.ToString()) ??
                         throw new InvalidOperationException("Failed to serialize an OpenAPI operation.");
         NormalizeOperationForComparison(root);
+        // These identify and group generated methods, not the endpoint's wire contract.
+        root.AsObject().Remove("operationId");
+        root.AsObject().Remove("tags");
 
         if (originalRoot?["components"] is not JsonObject components)
             return root;
@@ -501,8 +503,66 @@ public sealed class OpenApiMerger : IOpenApiMerger
         return new JsonObject
         {
             ["operation"] = root,
-            ["components"] = referencedComponents
+            ["components"] = CanonicalizeComponentReferences(root, referencedComponents)
         };
+    }
+
+    private static JsonObject CanonicalizeComponentReferences(JsonNode operation, JsonObject components)
+    {
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        var canonicalComponents = new JsonObject();
+
+        void Visit(JsonNode node)
+        {
+            if (node is JsonObject obj)
+            {
+                if (obj["$ref"] is JsonValue value && value.TryGetValue(out string? reference) && reference != null &&
+                    TryParseComponentReference(reference, out string section, out string encodedName, out string suffix))
+                {
+                    string key = $"{section}/{DecodeJsonPointerSegment(encodedName)}";
+                    if (components[key] is JsonNode component)
+                    {
+                        if (!names.TryGetValue(key, out string? canonicalName))
+                        {
+                            canonicalName = $"{section}/component{names.Count}";
+                            names.Add(key, canonicalName);
+                            // Register before descending so recursive schemas terminate.
+                            JsonNode copy = component.DeepClone();
+                            canonicalComponents[canonicalName] = copy;
+                            Visit(copy);
+                        }
+
+                        obj["$ref"] = $"#/components/{canonicalName}{suffix}";
+                    }
+                }
+
+                // Property order in source JSON must not affect the assigned component names.
+                foreach ((_, JsonNode? child) in obj.OrderBy(static property => property.Key, StringComparer.Ordinal))
+                {
+                    if (child != null)
+                        Visit(child);
+                }
+            }
+            else if (node is JsonArray array)
+            {
+                foreach (JsonNode? child in array)
+                {
+                    if (child != null)
+                        Visit(child);
+                }
+            }
+        }
+
+        Visit(operation);
+
+        // Security requirement names are not $refs; retain their schemes for comparison as well.
+        foreach ((string key, JsonNode? component) in components)
+        {
+            if (!names.ContainsKey(key))
+                canonicalComponents[key] = component?.DeepClone();
+        }
+
+        return canonicalComponents;
     }
 
     private static void CollectReferencedComponents(JsonNode node, JsonObject components, JsonObject collected, HashSet<string> visited)
@@ -541,6 +601,33 @@ public sealed class OpenApiMerger : IOpenApiMerger
             foreach (string schemeName in requirement.Select(static property => property.Key))
             {
                 AddReferencedComponent("securitySchemes", schemeName, components, collected, visited);
+            }
+        }
+
+        foreach ((string key, JsonNode? scheme) in collected)
+        {
+            if (!key.StartsWith("securitySchemes/", StringComparison.Ordinal) || scheme?["flows"] is not JsonObject flows)
+                continue;
+
+            string schemeName = key["securitySchemes/".Length..];
+            var requiredScopes = securityRequirements.OfType<JsonObject>()
+                .SelectMany(requirement => (requirement[schemeName] as JsonArray)?.OfType<JsonValue>() ?? [])
+                .Select(static scope => scope.GetValue<string>())
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (JsonObject flow in flows.Select(static property => property.Value).OfType<JsonObject>())
+            {
+                if (flow["scopes"] is not JsonObject scopes)
+                    continue;
+
+                // A scheme can advertise scopes for unrelated endpoints in its source document.
+                foreach (string scope in scopes.Select(static property => property.Key).ToArray())
+                {
+                    if (!requiredScopes.Contains(scope))
+                        scopes.Remove(scope);
+                    else
+                        scopes[scope] = ""; // Scope descriptions are documentation.
+                }
             }
         }
     }
