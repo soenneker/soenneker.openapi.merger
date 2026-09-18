@@ -10,7 +10,7 @@ using Soenneker.Tests.HostedUnit;
 namespace Soenneker.OpenApi.Merger.Tests;
 
 [ClassDataSource<Host>(Shared = SharedType.PerTestSession)]
-public sealed class OpenApiMergerTests : HostedUnitTest
+public sealed partial class OpenApiMergerTests : HostedUnitTest
 {
     private readonly IOpenApiMerger _util;
 
@@ -75,12 +75,6 @@ public sealed class OpenApiMergerTests : HostedUnitTest
             File.Delete(firstPath);
             File.Delete(secondPath);
         }
-    }
-
-    [Test]
-    public void Default()
-    {
-
     }
 
     [Test]
@@ -235,7 +229,7 @@ public sealed class OpenApiMergerTests : HostedUnitTest
     }
 
     [Test]
-    public async ValueTask MergeOpenApis_repairs_unresolved_schema_references(CancellationToken cancellationToken)
+    public async ValueTask MergeOpenApis_rejects_unresolved_schema_references(CancellationToken cancellationToken)
     {
         string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.json");
         const string document = """
@@ -264,10 +258,16 @@ public sealed class OpenApiMergerTests : HostedUnitTest
         try
         {
             await File.WriteAllTextAsync(path, document, cancellationToken);
-            OpenApiDocument merged = await _util.MergeOpenApis([("accounts", path)], cancellationToken);
-
-            IOpenApiSchema schema = merged.Paths["/accounts/users"]!.Operations![HttpMethod.Get]!.Responses!["200"]!.Content!["application/json"]!.Schema!;
-            await Assert.That(schema.Type).IsEqualTo(JsonSchemaType.Object);
+            bool rejected = false;
+            try
+            {
+                await _util.MergeOpenApis([("accounts", path)], cancellationToken);
+            }
+            catch (InvalidOperationException)
+            {
+                rejected = true;
+            }
+            await Assert.That(rejected).IsTrue();
         }
         finally
         {

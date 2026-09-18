@@ -6,7 +6,7 @@ using Microsoft.OpenApi;
 namespace Soenneker.OpenApi.Merger.Abstract;
 
 /// <summary>
-/// Merges OpenAPI documents while namespacing paths, components, and operation identifiers.
+/// Merges OpenAPI 3.0 and 3.1 documents while preserving operation contracts and namespacing colliding identifiers.
 /// </summary>
 public interface IOpenApiMerger
 {
@@ -16,6 +16,12 @@ public interface IOpenApiMerger
     /// <param name="inputs">The prefix and file path for each OpenAPI JSON or YAML document.</param>
     /// <param name="cancellationToken">Token used to cancel the operation.</param>
     /// <returns>The validated merged document.</returns>
+    /// <remarks>
+    /// Inherited security, parameters, and servers are made explicit on operations. Equivalent operations on the same
+    /// method and prefixed path are combined; conflicting contracts fail. Referenced local documents must be included
+    /// in <paramref name="inputs"/>. Broken references are never replaced with unconstrained schemas.
+    /// </remarks>
+    /// <exception cref="System.InvalidOperationException">An input, reference, merge conflict, or emitted document is invalid or unsupported.</exception>
     ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -24,6 +30,7 @@ public interface IOpenApiMerger
     /// <param name="directoryPath">The root directory to search recursively for JSON and YAML documents.</param>
     /// <param name="cancellationToken">Token used to cancel the operation.</param>
     /// <returns>The validated merged document.</returns>
+    /// <remarks>Unrelated files are skipped. Files declaring OpenAPI that are malformed or unsupported fail the merge.</remarks>
     ValueTask<OpenApiDocument> MergeDirectory(string directoryPath, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -36,9 +43,10 @@ public interface IOpenApiMerger
     ValueTask<OpenApiDocument> MergeGitUrl(string gitUrl, string? repositorySubdirectory = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Serializes a merged OpenAPI document as v3 JSON.
+    /// Serializes a merged document as OpenAPI 3.0 JSON, or 3.1 JSON if any merged input used 3.1.
     /// </summary>
     /// <param name="document">The document to serialize.</param>
-    /// <returns>OpenAPI 3 JSON.</returns>
+    /// <returns>OpenAPI JSON with the merged document's schema semantics preserved.</returns>
+    /// <remarks>Documents not returned by this merger default to OpenAPI 3.0 serialization.</remarks>
     string ToJson(OpenApiDocument document);
 }
