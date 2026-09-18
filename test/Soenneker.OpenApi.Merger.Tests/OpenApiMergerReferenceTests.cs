@@ -9,6 +9,62 @@ namespace Soenneker.OpenApi.Merger.Tests;
 public sealed partial class OpenApiMergerTests
 {
     [Test]
+    [Arguments("3.0.3", false)]
+    [Arguments("3.0.3", true)]
+    [Arguments("3.1.1", false)]
+    [Arguments("3.1.1", true)]
+    public async Task Preserves_LinkedIn_path_template_names_and_links(string version, bool referencedParameter, CancellationToken token)
+    {
+        const string path = "/posts/{encoded ugcPostUrn|shareUrn}";
+        const string name = "encoded ugcPostUrn|shareUrn";
+        JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
+        source["openapi"] = version;
+        JsonObject pathItem = (JsonObject)source["paths"]!["/items"]!.DeepClone();
+        source["paths"] = new JsonObject { [path] = pathItem };
+        JsonNode parameter = JsonNode.Parse("""{"name":"encoded ugcPostUrn|shareUrn","in":"path","required":true,"schema":{"type":"string"}}""")!;
+        if (referencedParameter)
+        {
+            source["components"] = new JsonObject { ["parameters"] = new JsonObject { ["PostUrn"] = parameter } };
+            pathItem["parameters"] = JsonNode.Parse("""[{"$ref":"#/components/parameters/PostUrn"}]""");
+        }
+        else
+            pathItem["get"]!["parameters"] = new JsonArray(parameter);
+
+        string target = "#/paths/" + Uri.EscapeDataString(path.Replace("/", "~1", StringComparison.Ordinal)) + "/get";
+        pathItem["get"]!["responses"]!["200"]!["links"] = new JsonObject
+        {
+            ["self"] = new JsonObject { ["operationRef"] = target }
+        };
+
+        JsonObject merged = await MergeJson(token, ("linkedin", source.ToJsonString()));
+        JsonNode operation = merged["paths"]!["/linkedin" + path]!["get"]!;
+        JsonNode mergedParameter = referencedParameter
+            ? merged["components"]!["parameters"]!["PostUrn"]!
+            : operation["parameters"]![0]!;
+        await Assert.That(mergedParameter["name"]!.GetValue<string>()).IsEqualTo(name);
+        await Assert.That(mergedParameter["required"]!.GetValue<bool>()).IsTrue();
+        string operationRef = operation["responses"]!["200"]!["links"]!["self"]!["operationRef"]!.GetValue<string>();
+        await Assert.That(Uri.UnescapeDataString(operationRef)).IsEqualTo("#/paths/~1linkedin~1posts~1{" + name + "}/get");
+    }
+
+    [Test]
+    [Arguments("/bad path/{id}")]
+    [Arguments("/posts/{id}/bad path")]
+    [Arguments("/posts/{id}?query=value")]
+    [Arguments("/posts/{id}#fragment")]
+    [Arguments("/posts/{id")]
+    [Arguments("/posts/{}")]
+    [Arguments("/posts/{nested{id}}")]
+    public async Task Rejects_invalid_literal_paths_and_malformed_templates(string path, CancellationToken token)
+    {
+        JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
+        JsonObject pathItem = (JsonObject)source["paths"]!["/items"]!.DeepClone();
+        pathItem["get"]!["parameters"] = JsonNode.Parse("""[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}]""");
+        source["paths"] = new JsonObject { [path] = pathItem };
+        await Reject(token, ("api", source.ToJsonString()));
+    }
+
+    [Test]
     public async Task Collision_renames_are_atomic_for_security_and_component_references(CancellationToken token)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();

@@ -518,7 +518,9 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
 
     private static string PrefixPath(string prefix, string path)
     {
-        if (!path.StartsWith('/') || path.Contains('?') || path.Contains('#') || path.Any(char.IsWhiteSpace))
+        // Template names identify parameters; they are replaced by values before constructing the request URL.
+        string literalPath = System.Text.RegularExpressions.Regex.Replace(path, @"\{[^{}]+\}", "");
+        if (!path.StartsWith('/') || literalPath.Contains('?') || literalPath.Contains('#') || literalPath.Any(char.IsWhiteSpace))
             throw new InvalidOperationException($"Invalid OpenAPI path '{path}'.");
         string start = "/" + prefix.Trim('/');
         return path == start || path.StartsWith(start + "/", StringComparison.Ordinal) ? path : start + path;
