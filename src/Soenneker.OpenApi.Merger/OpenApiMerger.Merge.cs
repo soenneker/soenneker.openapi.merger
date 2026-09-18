@@ -8,10 +8,12 @@ namespace Soenneker.OpenApi.Merger;
 
 public sealed partial class OpenApiMerger
 {
-    private static void NormalizeInheritedSettings(JsonObject root, JsonObject merged, List<(SourceDocument Source, JsonObject Root)> documents)
+    private static void NormalizeInheritedSettings(JsonObject root, JsonObject merged,
+        List<(SourceDocument Source, JsonObject Root)> documents)
     {
         if (root.ContainsKey("servers") && root["servers"] is not JsonArray)
             throw new InvalidOperationException("Root servers must be an array.");
+
         JsonNode Resolve(string reference)
         {
             if (TryResolvePointer(merged, reference, out JsonNode? component))
@@ -33,10 +35,12 @@ public sealed partial class OpenApiMerger
             JsonObject result = (JsonObject)Dereference(target, visited).DeepClone();
             foreach ((string key, JsonNode? value) in obj.Where(static property => property.Key != "$ref"))
             {
-                if (result.ContainsKey(key) && key is not "summary" and not "description" && !JsonNode.DeepEquals(result[key], value))
+                if (result.ContainsKey(key) && key is not "summary" and not "description" &&
+                    !JsonNode.DeepEquals(result[key], value))
                     throw new InvalidOperationException($"Conflicting sibling '{key}' on reference '{reference}'.");
                 result[key] = value?.DeepClone();
             }
+
             return result;
         }
 
@@ -53,12 +57,16 @@ public sealed partial class OpenApiMerger
                 if (item is not JsonObject parameter)
                     throw new InvalidOperationException($"Invalid parameter at {pointer}.");
                 JsonObject resolved = Dereference(parameter, new HashSet<string>(StringComparer.Ordinal));
-                string name = StringValue(resolved["name"]) ?? throw new InvalidOperationException($"Parameter at {pointer} has no name.");
-                string location = StringValue(resolved["in"]) ?? throw new InvalidOperationException($"Parameter '{name}' at {pointer} has no location.");
+                string name = StringValue(resolved["name"]) ??
+                              throw new InvalidOperationException($"Parameter at {pointer} has no name.");
+                string location = StringValue(resolved["in"]) ??
+                                  throw new InvalidOperationException(
+                                      $"Parameter '{name}' at {pointer} has no location.");
                 if (!names.Add((name, location)))
                     throw new InvalidOperationException($"Duplicate parameter '{name}' in '{location}' at {pointer}.");
                 result.Add((name, location, parameter));
             }
+
             return result;
         }
 
@@ -75,26 +83,41 @@ public sealed partial class OpenApiMerger
                 foreach ((string key, JsonNode? value) in resolved)
                     obj[key] = value?.DeepClone();
             }
-            List<(string Name, string Location, JsonNode Node)> inheritedParameters = Parameters(obj["parameters"], pointer);
-            JsonNode servers = obj["servers"] is JsonArray pathServers && pathServers.Count > 0 ? pathServers
-                : root["servers"] is JsonArray rootServers && rootServers.Count > 0 ? rootServers
-                : new JsonArray(new JsonObject { ["url"] = "/" });
+
+            List<(string Name, string Location, JsonNode Node)> inheritedParameters =
+                Parameters(obj["parameters"], pointer);
+            JsonNode servers = obj["servers"] is JsonArray pathServers && pathServers.Count > 0 ? pathServers :
+                root["servers"] is JsonArray rootServers && rootServers.Count > 0 ? rootServers :
+                new JsonArray(new JsonObject { ["url"] = "/" });
             foreach ((string method, JsonNode? node) in obj.ToArray())
             {
                 if (!JsonTraversal.IsHttpMethod(method) || node is not JsonObject operation)
                     continue;
                 if (operation.ContainsKey("servers") && operation["servers"] is not JsonArray)
                     throw new InvalidOperationException($"Servers at {pointer}/{method} must be an array.");
-                List<(string Name, string Location, JsonNode Node)> localParameters = Parameters(operation["parameters"], pointer + "/" + method);
-                (string Name, string Location, JsonNode Node)[] effective = inheritedParameters.Where(inherited => !localParameters.Any(local => local.Name == inherited.Name && local.Location == inherited.Location))
-                    .Concat(localParameters).OrderBy(static parameter => parameter.Location, StringComparer.Ordinal).ThenBy(static parameter => parameter.Name, StringComparer.Ordinal).ToArray();
+                List<(string Name, string Location, JsonNode Node)> localParameters =
+                    Parameters(operation["parameters"], pointer + "/" + method);
+                (string Name, string Location, JsonNode Node)[] effective = inheritedParameters
+                                                                            .Where(inherited =>
+                                                                                !localParameters.Any(local =>
+                                                                                    local.Name == inherited.Name &&
+                                                                                    local.Location ==
+                                                                                    inherited.Location))
+                                                                            .Concat(localParameters)
+                                                                            .OrderBy(
+                                                                                static parameter => parameter.Location,
+                                                                                StringComparer.Ordinal)
+                                                                            .ThenBy(static parameter => parameter.Name,
+                                                                                StringComparer.Ordinal).ToArray();
                 if (effective.Length > 0)
-                    operation["parameters"] = new JsonArray(effective.Select(static parameter => parameter.Node.DeepClone()).ToArray());
+                    operation["parameters"] =
+                        new JsonArray(effective.Select(static parameter => parameter.Node.DeepClone()).ToArray());
                 if (!operation.ContainsKey("security"))
                     operation["security"] = root["security"]?.DeepClone() ?? new JsonArray();
                 if (operation["servers"] is not JsonArray operationServers || operationServers.Count == 0)
                     operation["servers"] = servers.DeepClone();
             }
+
             // Settings are now operation-local, so merging another method cannot change its inheritance.
             obj.Remove("parameters");
             obj.Remove("servers");
@@ -113,6 +136,7 @@ public sealed partial class OpenApiMerger
                 MergeMetadata(destination, path, node, section);
                 continue;
             }
+
             if (node is not JsonObject candidate)
                 throw new InvalidOperationException($"Path '{path}' must contain a path item.");
             if (destination[path] is not JsonObject existing)
@@ -120,6 +144,7 @@ public sealed partial class OpenApiMerger
                 destination[path] = candidate.DeepClone();
                 continue;
             }
+
             foreach ((string field, JsonNode? value) in candidate)
             {
                 if (!JsonTraversal.IsHttpMethod(field))
@@ -127,6 +152,7 @@ public sealed partial class OpenApiMerger
                     MergeMetadata(existing, field, value, path);
                     continue;
                 }
+
                 if (value is not JsonObject operation)
                     throw new InvalidOperationException($"Operation '{field} {path}' must be an object.");
                 if (existing[field] is not JsonObject previous)
@@ -134,8 +160,10 @@ public sealed partial class OpenApiMerger
                     existing[field] = operation.DeepClone();
                     continue;
                 }
+
                 if (!JsonNode.DeepEquals(OperationSignature(previous, merged), OperationSignature(operation, merged)))
-                    throw new InvalidOperationException($"Multiple source documents produced different operations for '{field} {path}'.");
+                    throw new InvalidOperationException(
+                        $"Multiple source documents produced different operations for '{field} {path}'.");
                 MergeDocumentation(previous, operation);
             }
         }
@@ -163,9 +191,17 @@ public sealed partial class OpenApiMerger
             JsonNode component = SortObject(target!);
             components[name] = component;
             if (++referenceDepth > 128)
-                throw new InvalidOperationException("Component reference graph exceeds the supported comparison depth.");
-            try { Normalize(component, kind); }
-            finally { referenceDepth--; }
+                throw new InvalidOperationException(
+                    "Component reference graph exceeds the supported comparison depth.");
+            try
+            {
+                Normalize(component, kind);
+            }
+            finally
+            {
+                referenceDepth--;
+            }
+
             return canonical;
         }
 
@@ -181,6 +217,7 @@ public sealed partial class OpenApiMerger
                     obj.Remove("example");
                     obj.Remove("examples");
                 }
+
                 if (kind == ObjectKind.Operation)
                 {
                     obj.Remove("operationId");
@@ -199,22 +236,27 @@ public sealed partial class OpenApiMerger
                                 string componentName = name["#/components/".Length..];
                                 if (components[componentName]?["flows"] is JsonObject flows)
                                 {
-                                    HashSet<string?> required = (scopes as JsonArray)?.Select(StringValue).ToHashSet(StringComparer.Ordinal) ?? [];
-                                    foreach (JsonObject flow in flows.Select(static entry => entry.Value).OfType<JsonObject>())
+                                    HashSet<string?> required = (scopes as JsonArray)?.Select(StringValue)
+                                        .ToHashSet(StringComparer.Ordinal) ?? [];
+                                    foreach (JsonObject flow in flows.Select(static entry => entry.Value)
+                                                                     .OfType<JsonObject>())
                                         if (flow["scopes"] is JsonObject advertised)
-                                            foreach (string scope in advertised.Select(static entry => entry.Key).ToArray())
+                                            foreach (string scope in advertised.Select(static entry => entry.Key)
+                                                                               .ToArray())
                                                 if (!required.Contains(scope))
                                                     advertised.Remove(scope);
                                                 else
                                                     advertised[scope] = "";
                                 }
                             }
+
                             requirement.Clear();
                             foreach ((string key, JsonNode? value) in renamed)
                                 requirement[key] = value?.DeepClone();
                         }
                     }
                 }
+
                 if (StringValue(obj["$ref"]) is string reference)
                     obj["$ref"] = AddReference(reference, kind);
                 if (kind == ObjectKind.Schema && obj["discriminator"]?["mapping"] is JsonObject mapping)
@@ -237,6 +279,7 @@ public sealed partial class OpenApiMerger
                 result[key] = value == null ? null : SortObject(value);
             return result;
         }
+
         if (node is JsonArray array)
             return new JsonArray(array.Select(static value => value == null ? null : SortObject(value)).ToArray());
         return node.DeepClone();
@@ -246,7 +289,8 @@ public sealed partial class OpenApiMerger
     {
         JsonTraversal.Visit(target, ObjectKind.Operation, (obj, _, pointer) =>
         {
-            if (!TryResolvePointer(candidate, pointer, out JsonNode? matching, uriEncoded: false) || matching is not JsonObject other)
+            if (!TryResolvePointer(candidate, pointer, out JsonNode? matching, uriEncoded: false) ||
+                matching is not JsonObject other)
                 return;
             foreach (string key in new[] { "summary", "description" })
                 if (StringValue(other[key]) is string text && text.Length > (StringValue(obj[key])?.Length ?? 0))
@@ -268,7 +312,9 @@ public sealed partial class OpenApiMerger
         JsonArray destination = (merged["tags"] ??= new JsonArray()).AsArray();
         foreach (JsonObject tag in tags.OfType<JsonObject>())
         {
-            JsonObject? existing = destination.OfType<JsonObject>().FirstOrDefault(item => StringValue(item["name"]) == StringValue(tag["name"]));
+            JsonObject? existing = destination.OfType<JsonObject>()
+                                              .FirstOrDefault(item =>
+                                                  StringValue(item["name"]) == StringValue(tag["name"]));
             if (existing == null)
                 destination.Add(tag.DeepClone());
             else
