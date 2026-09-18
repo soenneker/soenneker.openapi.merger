@@ -46,6 +46,46 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
+    public async Task Preserves_Postman_metadata_scoped_to_each_collection(CancellationToken token)
+    {
+        JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
+        first["x-postman-warnings"] = new JsonArray("First warning");
+        first["x-postman-variables"] = JsonNode.Parse("""[{"key":"baseUrl","value":"https://first.example"}]""");
+        first["x-postman-events"] = JsonNode.Parse("""[{"listen":"prerequest","script":{"exec":["first()"]}}]""");
+        first["x-postman-unmapped-requests"] = JsonNode.Parse("""[{"reason":"missing-url","item":{"name":"Missing"}}]""");
+        JsonObject second = (JsonObject)first.DeepClone();
+        second["x-postman-warnings"] = new JsonArray("Second warning");
+        second["x-postman-variables"]![0]!["value"] = "https://second.example";
+        second["x-postman-events"]![0]!["script"]!["exec"]![0] = "second()";
+        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        JsonArray collections = merged["x-merged-postman-collections"]!.AsArray();
+        await Assert.That(collections.Count).IsEqualTo(2);
+        for (int i = 0; i < 2; i++)
+        {
+            JsonObject original = i == 0 ? first : second;
+            await Assert.That(collections[i]!["prefix"]!.GetValue<string>()).IsEqualTo(i == 0 ? "first" : "second");
+            foreach (string key in original.Select(pair => pair.Key).Where(key => key.StartsWith("x-postman-", StringComparison.Ordinal)))
+            {
+                await Assert.That(merged.ContainsKey(key)).IsFalse();
+                await Assert.That(JsonNode.DeepEquals(collections[i]!["metadata"]![key], original[key])).IsTrue();
+            }
+        }
+        JsonObject single = await MergeJson(token, ("first", first.ToJsonString()));
+        await Assert.That(JsonNode.DeepEquals(single["x-postman-variables"], first["x-postman-variables"])).IsTrue();
+        await Assert.That(single.ContainsKey("x-merged-postman-collections")).IsFalse();
+    }
+
+    [Test]
+    public async Task Still_rejects_conflicting_unknown_extensions(CancellationToken token)
+    {
+        JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
+        first["x-custom"] = "first";
+        JsonObject second = (JsonObject)first.DeepClone();
+        second["x-custom"] = "second";
+        await Reject(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+    }
+
+    [Test]
     public async Task Preserves_inherited_security_servers_and_explicit_anonymous_access(CancellationToken token)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();

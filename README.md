@@ -75,6 +75,8 @@ The optional subdirectory must resolve inside the cloned repository. The same re
 
 ## Output
 
+When combining multiple documents from the Postman converter, collection-level `x-postman-warnings`, `x-postman-variables`, `x-postman-events`, and `x-postman-unmapped-requests` are retained under `x-merged-postman-collections`. Each entry contains its input `prefix` and original `metadata`, keeping collection variables and scripts separate. A single input retains these extensions at the root. Conflicting unknown extensions still fail explicitly.
+
 `ToJson` emits OpenAPI 3.0 when all inputs use 3.0, or OpenAPI 3.1 when any input uses 3.1. Mixed inputs upgrade 3.0 nullable schemas to 3.1 semantics. Webhooks, reusable path items, recursive schemas, discriminator mappings, and callback operations are retained. Examples, defaults, and extension payloads are not traversed as OpenAPI objects.
 
 The output is checked both before and after serialization. Boolean schemas and non-string `const` values may be expressed using equivalent object schemas or singleton enums to avoid limitations of the underlying OpenAPI model. JSON Schema keywords such as `prefixItems` remain at their actual schema locations.

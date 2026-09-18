@@ -249,15 +249,28 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
         foreach ((_, JsonObject root) in transformed)
             MergeComponents(merged, root);
 
-        foreach ((_, JsonObject root) in transformed)
+        var postmanCollections = new JsonArray();
+        foreach ((SourceDocument source, JsonObject root) in transformed)
         {
             cancellationToken.ThrowIfCancellationRequested();
             MergePathMap(merged, root, "paths");
             MergePathMap(merged, root, "webhooks");
             MergeTags(merged, root);
+            var postmanMetadata = new JsonObject();
             foreach ((string key, JsonNode? value) in root.Where(static entry => entry.Key.StartsWith("x-", StringComparison.Ordinal) || entry.Key == "jsonSchemaDialect"))
-                MergeMetadata(merged, key, value, "document");
+            {
+                // These converter payloads describe the source collection, not the merged API.
+                // In particular, collection variables and scripts must keep their original scope.
+                if (sources.Count > 1 && key is "x-postman-warnings" or "x-postman-variables" or "x-postman-events" or "x-postman-unmapped-requests")
+                    postmanMetadata[key] = value?.DeepClone();
+                else
+                    MergeMetadata(merged, key, value, "document");
+            }
+            if (postmanMetadata.Count > 0)
+                postmanCollections.Add(new JsonObject { ["prefix"] = source.Prefix, ["metadata"] = postmanMetadata });
         }
+        if (postmanCollections.Count > 0)
+            MergeMetadata(merged, "x-merged-postman-collections", postmanCollections, "document");
         // References to reusable path items/callbacks are also part of the resulting document.
         EnsureUniqueOperationIds(merged);
         ValidateContract(merged, cancellationToken);
