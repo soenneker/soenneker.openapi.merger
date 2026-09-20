@@ -191,13 +191,14 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
             JsonTraversal.Visit(root, ObjectKind.Document, (obj, kind, pointer) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                // Introduced allOf children must still contain source references when traversal visits them.
+                if (kind == ObjectKind.Schema && is31)
+                    PreserveSchemaConstraints(obj);
                 if (StringValue(obj["$ref"]) is string reference)
                     obj["$ref"] = RewriteReference(reference, source, lookup);
                 if (kind == ObjectKind.Schema)
                 {
                     obj.Remove("$anchor"); // All anchors are rewritten to unambiguous JSON pointers.
-                    if (is31)
-                        PreserveSchemaConstraints(obj);
                     RewriteDiscriminator(obj, source, lookup, pointer);
                 }
                 if (kind is ObjectKind.Operation or ObjectKind.Document)

@@ -9,6 +9,29 @@ namespace Soenneker.OpenApi.Merger.Tests;
 public sealed partial class OpenApiMergerTests
 {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Schema_reference_siblings_are_rewritten_once_after_component_collisions(bool shadowRenamedTarget, CancellationToken token)
+    {
+        JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
+        first["openapi"] = "3.1.0";
+        first["components"] = JsonNode.Parse("""{"schemas":{"Type":{"type":"integer"}}}""");
+        JsonObject second = JsonNode.Parse(Minimal)!.AsObject();
+        second["openapi"] = "3.1.0";
+        second["components"] = JsonNode.Parse("""{"schemas":{"Type":{"type":"string","enum":["usage_limit","stats_notification"]}}}""");
+        if (shadowRenamedTarget)
+            second["components"]!["schemas"]!["tsg_alerts_v3_Type"] = JsonNode.Parse("""{"type":"boolean"}""");
+        second["paths"]!["/items"]!["get"]!["responses"]!["200"]!["content"] = JsonNode.Parse("""{"application/json":{"schema":{"type":"string","description":"The type of alert.","$ref":"#/components/schemas/Type"}}}""");
+
+        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("tsg_alerts_v3", second.ToJsonString()));
+        JsonNode schema = merged["paths"]!["/tsg_alerts_v3/items"]!["get"]!["responses"]!["200"]!["content"]!["application/json"]!["schema"]!;
+        await Assert.That(schema["type"]!.GetValue<string>()).IsEqualTo("string");
+        await Assert.That(schema["description"]!.GetValue<string>()).IsEqualTo("The type of alert.");
+        await Assert.That(schema["allOf"]![0]!["$ref"]!.GetValue<string>()).IsEqualTo("#/components/schemas/tsg_alerts_v3_Type");
+        await Assert.That(merged["components"]!["schemas"]!["tsg_alerts_v3_Type"]!["enum"]![0]!.GetValue<string>()).IsEqualTo("usage_limit");
+    }
+
+    [Test]
     [Arguments("3.0.3", false)]
     [Arguments("3.0.3", true)]
     [Arguments("3.1.1", false)]
