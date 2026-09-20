@@ -161,10 +161,14 @@ public sealed partial class OpenApiMerger
                     continue;
                 }
 
-                if (!JsonNode.DeepEquals(OperationSignature(previous, merged), OperationSignature(operation, merged)))
+                JsonObject enrichedPrevious = (JsonObject)previous.DeepClone();
+                JsonObject enrichedOperation = (JsonObject)operation.DeepClone();
+                FillMissingResponseSchemas(enrichedPrevious, enrichedOperation);
+                if (!JsonNode.DeepEquals(OperationSignature(enrichedPrevious, merged), OperationSignature(enrichedOperation, merged)))
                     throw new InvalidOperationException(
                         $"Multiple source documents produced different operations for '{field} {path}'.");
-                MergeDocumentation(previous, operation);
+                existing[field] = enrichedPrevious;
+                MergeDocumentation(enrichedPrevious, enrichedOperation, merged);
             }
         }
     }
@@ -285,9 +289,12 @@ public sealed partial class OpenApiMerger
         return node.DeepClone();
     }
 
-    private static void MergeDocumentation(JsonObject target, JsonObject candidate)
+    private static void MergeDocumentation(JsonObject target, JsonObject candidate, JsonObject merged,
+        ObjectKind initialKind = ObjectKind.Operation, HashSet<(JsonObject, JsonObject)>? visited = null)
     {
-        JsonTraversal.Visit(target, ObjectKind.Operation, (obj, _, pointer) =>
+        visited ??= [];
+        if (!visited.Add((target, candidate))) return;
+        JsonTraversal.Visit(target, initialKind, (obj, kind, pointer) =>
         {
             if (!TryResolvePointer(candidate, pointer, out JsonNode? matching, uriEncoded: false) ||
                 matching is not JsonObject other)
@@ -295,6 +302,12 @@ public sealed partial class OpenApiMerger
             foreach (string key in new[] { "summary", "description" })
                 if (StringValue(other[key]) is string text && text.Length > (StringValue(obj[key])?.Length ?? 0))
                     obj[key] = text;
+            if (kind is ObjectKind.Schema or ObjectKind.MediaType or ObjectKind.Parameter or ObjectKind.Header)
+                MergeDocumentationExamples(obj, other, kind);
+            if (StringValue(obj["$ref"]) is string left && StringValue(other["$ref"]) is string right &&
+                TryResolvePointer(merged, left, out JsonNode? leftNode) && leftNode is JsonObject leftObject &&
+                TryResolvePointer(merged, right, out JsonNode? rightNode) && rightNode is JsonObject rightObject)
+                MergeDocumentation(leftObject, rightObject, merged, kind, visited);
         });
         if (candidate["tags"] is JsonArray tags)
         {

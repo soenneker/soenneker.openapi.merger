@@ -44,6 +44,8 @@ string json = merger.ToJson(merged);
 
 For example, the path `/users` from the `accounts` input becomes `/accounts/users`. If a source path already begins with its prefix, the prefix is not duplicated. Prefix matching is case-sensitive. Component names and operation IDs are made unique, and local or relative references are rewritten to follow renamed components.
 
+Equivalent duplicate operations retain examples from both inputs, including examples on referenced components. Named example collisions receive unique names. If matching response media types have a schema in only one input, the supplied schema fills the missing definition before comparison. Explicit schemas, including unconstrained schemas, must still agree; missing response bodies are not invented.
+
 Path prefixes describe the routes of the merged API. The serving gateway must expose those routes: the merger does not configure routing or make a source server serve a new prefixed URL.
 
 The merger preserves root and path-level security, parameters, and servers on each operation, including explicit anonymous access. Different methods can share a merged path. Equivalent operations on the same method and path are combined with richer documentation; differing contracts fail with the affected method and path. Schema properties named `description`, `example`, or other documentation keywords remain part of the comparison.

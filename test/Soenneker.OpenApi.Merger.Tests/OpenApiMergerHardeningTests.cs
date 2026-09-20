@@ -37,12 +37,46 @@ public sealed partial class OpenApiMergerTests
         }
     }
 
+    [Test]
+    public async Task Duplicate_operations_keep_response_examples_and_fill_missing_media_schemas(CancellationToken token)
+    {
+        const string first = """
+            {"openapi":"3.0.3","info":{"title":"API","version":"1"},"paths":{"/items":{"get":{"responses":{"200":{"description":"OK","content":{"application/json":{"example":{"at":1}}}}}}}}}
+            """;
+        const string second = """
+            {"openapi":"3.0.3","info":{"title":"API","version":"1"},"paths":{"/items":{"get":{"responses":{"200":{"description":"OK","content":{"application/json":{"schema":{"type":"object","properties":{"at":{"type":"integer","format":"int64"}}},"examples":{"example":{"value":{"at":1760631246905}}}}}}}}}}}
+            """;
+        foreach (bool reverse in new[] { false, true })
+        {
+            JsonObject result = await MergeJson(token, ("api", reverse ? second : first), ("api", reverse ? first : second));
+            JsonNode media = result["paths"]!["/api/items"]!["get"]!["responses"]!["200"]!["content"]!["application/json"]!;
+            await Assert.That(media["schema"]!["properties"]!["at"]!["format"]!.ToString()).IsEqualTo("int64");
+            await Assert.That(media["examples"]!.AsObject().Count).IsEqualTo(2);
+            await Assert.That(media["example"]).IsNull();
+        }
+    }
+
     private async Task Reject(CancellationToken token, params (string Prefix, string Json)[] inputs)
     {
         bool rejected = false;
         try { await MergeJson(token, inputs); }
         catch (InvalidOperationException) { rejected = true; }
         await Assert.That(rejected).IsTrue();
+    }
+
+    [Test]
+    public async Task Equivalent_referenced_responses_keep_examples_from_both_components(CancellationToken token)
+    {
+        const string spec = """
+            {"openapi":"3.0.3","info":{"title":"API","version":"1"},"paths":{"/items":{"get":{"responses":{"200":{"$ref":"#/components/responses/Result"}}}}},"components":{"responses":{"Result":{"description":"OK","content":{"application/json":{"schema":{"type":"object","properties":{"at":{"type":"integer","format":"int64"}}},"examples":{"saved":{"value":{"at":1}}}}}}}}}
+            """;
+        JsonObject second = JsonNode.Parse(spec)!.AsObject();
+        second["components"]!["responses"]!["Result"]!["content"]!["application/json"]!["examples"]!["saved"]!["value"]!["at"] = 1760631246905L;
+        JsonObject merged = await MergeJson(token, ("api", spec), ("api", second.ToJsonString()));
+        string reference = merged["paths"]!["/api/items"]!["get"]!["responses"]!["200"]!["$ref"]!.ToString();
+        JsonNode target = merged;
+        foreach (string segment in reference[2..].Split('/')) target = target[segment]!;
+        await Assert.That(target["content"]!["application/json"]!["examples"]!.AsObject().Count).IsEqualTo(2);
     }
 
     [Test]
