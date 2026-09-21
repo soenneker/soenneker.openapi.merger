@@ -251,6 +251,7 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
             MergeComponents(merged, root);
 
         var postmanCollections = new JsonArray();
+        var documentMetadata = new JsonArray();
         foreach ((SourceDocument source, JsonObject root) in transformed)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -258,20 +259,28 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
             MergePathMap(merged, root, "webhooks");
             MergeTags(merged, root);
             var postmanMetadata = new JsonObject();
+            var scopedMetadata = new JsonObject();
             foreach ((string key, JsonNode? value) in root.Where(static entry => entry.Key.StartsWith("x-", StringComparison.Ordinal) || entry.Key == "jsonSchemaDialect"))
             {
                 // These converter payloads describe the source collection, not the merged API.
                 // In particular, collection variables and scripts must keep their original scope.
                 if (sources.Count > 1 && key is "x-postman-warnings" or "x-postman-variables" or "x-postman-events" or "x-postman-unmapped-requests")
                     postmanMetadata[key] = value?.DeepClone();
+                // Samples and tag groups describe their source document, not the combined API.
+                else if (sources.Count > 1 && key is "x-samples" or "x-tagGroups")
+                    scopedMetadata[key] = value?.DeepClone();
                 else
                     MergeMetadata(merged, key, value, "document");
             }
             if (postmanMetadata.Count > 0)
                 postmanCollections.Add(new JsonObject { ["prefix"] = source.Prefix, ["metadata"] = postmanMetadata });
+            if (scopedMetadata.Count > 0)
+                documentMetadata.Add(new JsonObject { ["prefix"] = source.Prefix, ["metadata"] = scopedMetadata });
         }
         if (postmanCollections.Count > 0)
             MergeMetadata(merged, "x-merged-postman-collections", postmanCollections, "document");
+        if (documentMetadata.Count > 0)
+            MergeMetadata(merged, "x-merged-document-metadata", documentMetadata, "document");
         // References to reusable path items/callbacks are also part of the resulting document.
         EnsureUniqueOperationIds(merged);
         ValidateContract(merged, cancellationToken);

@@ -80,6 +80,31 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
+    public async Task Preserves_samples_and_tag_groups_scoped_to_source_documents(CancellationToken token)
+    {
+        JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
+        first["x-samples"] = JsonNode.Parse("""[{"$ref":"literal-sample","name":"first"}]""");
+        first["x-tagGroups"] = JsonNode.Parse("""[{"name":"First","tags":["items"]}]""");
+        JsonObject second = (JsonObject)first.DeepClone();
+        second["x-samples"]![0]!["name"] = "second";
+        second["x-tagGroups"]![0]!["name"] = "Second";
+        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        JsonArray metadata = merged["x-merged-document-metadata"]!.AsArray();
+        await Assert.That(metadata.Count).IsEqualTo(2);
+        for (int i = 0; i < 2; i++)
+        {
+            JsonObject original = i == 0 ? first : second;
+            await Assert.That(metadata[i]!["prefix"]!.GetValue<string>()).IsEqualTo(i == 0 ? "first" : "second");
+            foreach (string key in new[] { "x-samples", "x-tagGroups" })
+                await Assert.That(JsonNode.DeepEquals(metadata[i]!["metadata"]![key], original[key])).IsTrue();
+        }
+        await Assert.That(merged["x-samples"]).IsNull();
+        JsonObject single = await MergeJson(token, ("first", first.ToJsonString()));
+        await Assert.That(JsonNode.DeepEquals(single["x-samples"], first["x-samples"])).IsTrue();
+        await Assert.That(single["x-merged-document-metadata"]).IsNull();
+    }
+
+    [Test]
     public async Task Preserves_Postman_metadata_scoped_to_each_collection(CancellationToken token)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();

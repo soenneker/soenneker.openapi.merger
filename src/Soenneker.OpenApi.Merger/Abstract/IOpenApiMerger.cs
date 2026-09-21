@@ -20,6 +20,8 @@ public interface IOpenApiMerger
     /// Inherited security, parameters, and servers are made explicit on operations. Equivalent operations on the same
     /// method and prefixed path are combined; conflicting contracts fail. Referenced local documents must be included
     /// in <paramref name="inputs"/>. Broken references are never replaced with unconstrained schemas.
+    /// When merging multiple sources, document-level x-samples and x-tagGroups are retained per source prefix
+    /// under x-merged-document-metadata, rather than being treated as global metadata.
     /// </remarks>
     /// <exception cref="System.InvalidOperationException">An input, reference, merge conflict, or emitted document is invalid or unsupported.</exception>
     ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs, CancellationToken cancellationToken = default);
