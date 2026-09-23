@@ -19,5 +19,6 @@ internal sealed class SourceDocument
     public JsonObject Document { get; set; }
     public Dictionary<string, Dictionary<string, string>> ComponentRenameMaps { get; set; }
     public Dictionary<string, string> OperationPointers { get; } = new(StringComparer.Ordinal);
+    public HashSet<string> AmbiguousOperationIds { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> Anchors { get; } = new(StringComparer.Ordinal);
 }

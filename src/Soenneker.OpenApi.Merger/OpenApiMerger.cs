@@ -141,6 +141,9 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
             throw new InvalidOperationException($"'{fullPath}' must use OpenAPI 3.0 or 3.1; unsupported versions cannot be merged without losing semantics.");
         if (root["info"] is not JsonObject info || string.IsNullOrWhiteSpace(StringValue(info["title"])) || string.IsNullOrWhiteSpace(StringValue(info["version"])))
             throw new InvalidOperationException($"'{fullPath}' requires info.title and info.version.");
+        // Shared component documents are common inputs to multi-file specifications.
+        if (!root.ContainsKey("paths") && root["components"] is JsonObject)
+            root["paths"] = new JsonObject();
         if (root["paths"] is not JsonObject && !(version.StartsWith("3.1.", StringComparison.Ordinal) && root["webhooks"] is JsonObject))
             throw new InvalidOperationException($"'{fullPath}' requires a paths object (or webhooks for OpenAPI 3.1).");
         ValidatePrefix(prefix);
@@ -171,7 +174,7 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
             JsonTraversal.Visit(source.Document, ObjectKind.Document, (obj, kind, pointer) =>
             {
                 if (kind == ObjectKind.Operation && StringValue(obj["operationId"]) is string id && !source.OperationPointers.TryAdd(id, pointer))
-                    throw new InvalidOperationException($"Duplicate operationId '{id}' in '{source.FilePath}'.");
+                    source.AmbiguousOperationIds.Add(id);
                 if (kind == ObjectKind.Schema)
                 {
                     if (obj.ContainsKey("$id") || obj.ContainsKey("$dynamicRef") || obj.ContainsKey("$dynamicAnchor"))
@@ -217,6 +220,8 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
                         throw new InvalidOperationException($"Link at {pointer} cannot specify both operationId and operationRef.");
                     if (StringValue(obj["operationId"]) is string targetId)
                     {
+                        if (source.AmbiguousOperationIds.Contains(targetId))
+                            throw new InvalidOperationException($"Link at {pointer} references ambiguous operationId '{targetId}' in '{source.FilePath}'.");
                         if (!source.OperationPointers.TryGetValue(targetId, out string? targetPointer))
                             throw new InvalidOperationException($"Link at {pointer} references missing operationId '{targetId}' in '{source.FilePath}'.");
                         obj.Remove("operationId");
@@ -330,7 +335,13 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
             string targetPath = absolute?.IsFile == true ? absolute.LocalPath
                 : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(source.FilePath)!, Uri.UnescapeDataString(location)));
             if (!lookup.TryGetValue(targetPath, out target!))
-                throw new InvalidOperationException($"Reference '{reference}' in '{source.FilePath}' targets a file that was not included in the merge.");
+            {
+                // Runners can convert YAML files to JSON without rewriting their relative references.
+                string extension = Path.GetExtension(targetPath);
+                if (!(extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase) || extension.Equals(".yml", StringComparison.OrdinalIgnoreCase)) ||
+                    !lookup.TryGetValue(Path.ChangeExtension(targetPath, ".json"), out target!))
+                    throw new InvalidOperationException($"Reference '{reference}' in '{source.FilePath}' targets a file that was not included in the merge.");
+            }
         }
         fragment = Uri.UnescapeDataString(fragment);
         if (!fragment.StartsWith("#/", StringComparison.Ordinal))

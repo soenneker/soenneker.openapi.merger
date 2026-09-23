@@ -22,6 +22,9 @@ public interface IOpenApiMerger
     /// in <paramref name="inputs"/>. Broken references are never replaced with unconstrained schemas.
     /// When merging multiple sources, document-level x-samples and x-tagGroups are retained per source prefix
     /// under x-merged-document-metadata, rather than being treated as global metadata.
+    /// Component-only documents may omit paths. Relative YAML references also resolve to an included same-directory,
+    /// same-stem JSON file when the original filename is absent. Duplicate operation IDs are disambiguated;
+    /// links to an ambiguous source operation ID still fail rather than selecting an arbitrary target.
     /// </remarks>
     /// <exception cref="System.InvalidOperationException">An input, reference, merge conflict, or emitted document is invalid or unsupported.</exception>
     ValueTask<OpenApiDocument> MergeOpenApis(IEnumerable<(string prefix, string filePath)> inputs, CancellationToken cancellationToken = default);
