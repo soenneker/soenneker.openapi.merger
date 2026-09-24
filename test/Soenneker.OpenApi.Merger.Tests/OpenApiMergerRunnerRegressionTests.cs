@@ -1,3 +1,4 @@
+using Soenneker.Utils.File.Abstract;
 using System;
 using System.IO;
 using System.Linq;
@@ -31,10 +32,10 @@ public sealed partial class OpenApiMergerTests
             JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
             source["paths"]!["/items"]!["get"]!["responses"]!["200"]!["content"] =
                 JsonNode.Parse("""{"application/json":{"schema":{"$ref":"numbers.yml#/components/schemas/Number"}}}""");
-            await File.WriteAllTextAsync(Path.Combine(directory, "api.json"), source.ToJsonString(), token);
-            await File.WriteAllTextAsync(Path.Combine(directory, "numbers.json"), """
+            await _fileUtil.Write(Path.Combine(directory, "api.json"), source.ToJsonString(), cancellationToken: token);
+            await _fileUtil.Write(Path.Combine(directory, "numbers.json"), """
                 {"openapi":"3.0.3","info":{"title":"Shared","version":"1"},"components":{"schemas":{"Number":{"type":"string","pattern":"^[0-9]+$"}}}}
-                """, token);
+                """, cancellationToken: token);
             JsonNode merged = JsonNode.Parse(_util.ToJson(await _util.MergeDirectory(directory, token)))!;
             await Assert.That(merged["paths"]!.AsObject().Count).IsEqualTo(1);
             await Assert.That(merged["components"]!["schemas"]!["Number"]!["pattern"]!.GetValue<string>()).IsEqualTo("^[0-9]+$");

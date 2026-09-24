@@ -1,3 +1,4 @@
+using Soenneker.Utils.File.Abstract;
 using System;
 using System.IO;
 using System.Net.Http;
@@ -12,10 +13,13 @@ namespace Soenneker.OpenApi.Merger.Tests;
 [ClassDataSource<Host>(Shared = SharedType.PerTestSession)]
 public sealed partial class OpenApiMergerTests : HostedUnitTest
 {
+    private readonly IFileUtil _fileUtil;
+
     private readonly IOpenApiMerger _util;
 
     public OpenApiMergerTests(Host host) : base(host)
     {
+        _fileUtil = Resolve<IFileUtil>(true);
         _util = Resolve<IOpenApiMerger>(true);
     }
 
@@ -56,8 +60,8 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
             renamed = renamed.Replace("[\"read\"]", "[\"write\"]", StringComparison.Ordinal);
         try
         {
-            await File.WriteAllTextAsync(firstPath, document, cancellationToken);
-            await File.WriteAllTextAsync(secondPath, renamed, cancellationToken);
+            await _fileUtil.Write(firstPath, document, cancellationToken: cancellationToken);
+            await _fileUtil.Write(secondPath, renamed, cancellationToken: cancellationToken);
             bool collisionThrown = false;
             try
             {
@@ -72,8 +76,8 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
         }
         finally
         {
-            File.Delete(firstPath);
-            File.Delete(secondPath);
+            await _fileUtil.Delete(firstPath);
+            await _fileUtil.Delete(secondPath);
         }
     }
 
@@ -114,9 +118,9 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
 
         try
         {
-            await File.WriteAllTextAsync(firstPath, document);
+            await _fileUtil.Write(firstPath, document);
             string richerDocument = document.Replace("\"description\": \"OK\"", "\"description\": \"A more detailed successful response\"", StringComparison.Ordinal);
-            await File.WriteAllTextAsync(secondPath, richerDocument);
+            await _fileUtil.Write(secondPath, richerDocument);
 
             OpenApiDocument merged = await _util.MergeOpenApis([("accounts", firstPath), ("billing", secondPath)], cancellationToken: cancellationToken);
 
@@ -131,8 +135,8 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
         }
         finally
         {
-            File.Delete(firstPath);
-            File.Delete(secondPath);
+            await _fileUtil.Delete(firstPath);
+            await _fileUtil.Delete(secondPath);
         }
     }
 
@@ -173,9 +177,8 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
 
         try
         {
-            await File.WriteAllTextAsync(firstPath, document, cancellationToken);
-            await File.WriteAllTextAsync(secondPath, document.Replace("\"type\": \"string\"", "\"type\": \"integer\"", StringComparison.Ordinal),
-                cancellationToken);
+            await _fileUtil.Write(firstPath, document, cancellationToken: cancellationToken);
+            await _fileUtil.Write(secondPath, document.Replace("\"type\": \"string\"", "\"type\": \"integer\"", StringComparison.Ordinal), cancellationToken: cancellationToken);
 
             bool collisionThrown = false;
 
@@ -192,8 +195,8 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
         }
         finally
         {
-            File.Delete(firstPath);
-            File.Delete(secondPath);
+            await _fileUtil.Delete(firstPath);
+            await _fileUtil.Delete(secondPath);
         }
     }
 
@@ -217,14 +220,14 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
 
         try
         {
-            await File.WriteAllTextAsync(path, document, cancellationToken);
+            await _fileUtil.Write(path, document, cancellationToken: cancellationToken);
             OpenApiDocument merged = await _util.MergeOpenApis([("accounts", path)], cancellationToken);
 
             await Assert.That(merged.Paths.ContainsKey("/accounts/users")).IsTrue();
         }
         finally
         {
-            File.Delete(path);
+            await _fileUtil.Delete(path);
         }
     }
 
@@ -257,7 +260,7 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
 
         try
         {
-            await File.WriteAllTextAsync(path, document, cancellationToken);
+            await _fileUtil.Write(path, document, cancellationToken: cancellationToken);
             bool rejected = false;
             try
             {
@@ -271,7 +274,7 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
         }
         finally
         {
-            File.Delete(path);
+            await _fileUtil.Delete(path);
         }
     }
 
@@ -297,14 +300,14 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
 
         try
         {
-            await File.WriteAllTextAsync(path, document, cancellationToken);
+            await _fileUtil.Write(path, document, cancellationToken: cancellationToken);
             OpenApiDocument merged = await _util.MergeOpenApis([("accounts", path)], cancellationToken);
 
             await Assert.That(merged.Paths.ContainsKey("/accounts/users")).IsTrue();
         }
         finally
         {
-            File.Delete(path);
+            await _fileUtil.Delete(path);
         }
     }
 

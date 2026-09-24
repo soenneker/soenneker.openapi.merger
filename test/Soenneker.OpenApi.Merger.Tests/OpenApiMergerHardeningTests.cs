@@ -1,3 +1,4 @@
+using Soenneker.Utils.File.Abstract;
 using System;
 using System.IO;
 using System.Linq;
@@ -26,7 +27,7 @@ public sealed partial class OpenApiMergerTests
             for (int i = 0; i < inputs.Length; i++)
             {
                 string path = Path.Combine(directory, i + ".json");
-                await File.WriteAllTextAsync(path, inputs[i].Json, token);
+                await _fileUtil.Write(path, inputs[i].Json, cancellationToken: token);
                 files[i] = (inputs[i].Prefix, path);
             }
             return JsonNode.Parse(_util.ToJson(await _util.MergeOpenApis(files, token)))!.AsObject();
@@ -311,11 +312,11 @@ public sealed partial class OpenApiMergerTests
         Directory.CreateDirectory(directory);
         try
         {
-            await File.WriteAllTextAsync(Path.Combine(directory, "api.json"), Minimal, token);
-            await File.WriteAllTextAsync(Path.Combine(directory, "package.json"), "{\"name\":\"package\"}", token);
+            await _fileUtil.Write(Path.Combine(directory, "api.json"), Minimal, cancellationToken: token);
+            await _fileUtil.Write(Path.Combine(directory, "package.json"), "{\"name\":\"package\"}", cancellationToken: token);
             OpenApiDocument merged = await _util.MergeDirectory(directory, token);
             await Assert.That(merged.Paths.Count).IsEqualTo(1);
-            await File.WriteAllTextAsync(Path.Combine(directory, "broken.json"), "{\"openapi\":\"3.0.3\",", token);
+            await _fileUtil.Write(Path.Combine(directory, "broken.json"), "{\"openapi\":\"3.0.3\",", cancellationToken: token);
             bool rejected = false;
             try { await _util.MergeDirectory(directory, token); }
             catch (InvalidOperationException) { rejected = true; }
