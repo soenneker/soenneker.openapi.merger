@@ -27,6 +27,11 @@ internal static class JsonTraversal
         if (node is not JsonObject obj)
             throw new InvalidOperationException($"Expected a {kind} object at {pointer}.");
 
+        // Some publishers (including Algolia) wrap a homogeneous item schema in an array.
+        // Only unwrap the unambiguous single-object form; leave payloads and tuples alone.
+        if (kind == ObjectKind.Schema && obj["items"] is JsonArray { Count: 1 } items && items[0] is JsonObject item)
+            obj["items"] = item.DeepClone();
+
         action(obj, kind, pointer);
 
         void Child(string key, ObjectKind childKind)

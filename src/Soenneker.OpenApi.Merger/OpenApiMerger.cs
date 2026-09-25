@@ -514,6 +514,8 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
 
     private JsonObject UpgradeTo31(JsonObject root, string context)
     {
+        // Normalize publisher schema shapes before the model reader sees the 3.0 document.
+        JsonTraversal.Visit(root, ObjectKind.Document, static (_, _, _) => { });
         OpenApiDocument document = ReadModel(root, context, validate: false);
         new OpenApiWalker(new SchemaKeywordPreserver(false)).Walk(document);
         using var text = new StringWriter();

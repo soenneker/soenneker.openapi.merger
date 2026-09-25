@@ -11,6 +11,35 @@ namespace Soenneker.OpenApi.Merger.Tests;
 public sealed partial class OpenApiMergerTests
 {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Merges_Algolia_single_item_schema_arrays(bool mixedVersions, CancellationToken token)
+    {
+        const string source = """
+            {"openapi":"3.0.2","info":{"title":"Crawler API","version":"1"},"paths":{
+              "/1/crawlers/{id}/delete_runs":{"post":{"operationId":"deleteCrawlRun",
+                "parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],
+                "requestBody":{"content":{"application/json":{"schema":{"type":"array","items":[{"$ref":"#/components/schemas/CrawlerLogID"}]},"example":{"items":[{"type":"literal"}]}}}},
+                "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{"type":"array","items":[{"$ref":"#/components/schemas/CrawlerLogID"}]}}}}}
+              }}},"components":{"schemas":{"CrawlerLogID":{"type":"string","pattern":"^[0-9]+$"}}}}
+            """;
+        JsonObject merged = mixedVersions
+            ? await MergeJson(token, ("crawler", source), ("other", """{"openapi":"3.1.0","info":{"title":"Other","version":"1"},"paths":{}}"""))
+            : await MergeJson(token, ("crawler", source));
+        JsonNode operation = merged["paths"]!["/crawler/1/crawlers/{id}/delete_runs"]!["post"]!;
+        JsonNode request = operation["requestBody"]!["content"]!["application/json"]!;
+        JsonNode response = operation["responses"]!["200"]!["content"]!["application/json"]!;
+        foreach (JsonNode media in new[] { request, response })
+        {
+            await Assert.That(media["schema"]!["items"] is JsonObject).IsTrue();
+            await Assert.That(media["schema"]!["items"]!["$ref"]!.GetValue<string>()).IsEqualTo("#/components/schemas/CrawlerLogID");
+        }
+        await Assert.That(merged["components"]!["schemas"]!["CrawlerLogID"]!["pattern"]!.GetValue<string>()).IsEqualTo("^[0-9]+$");
+        await Assert.That(request["example"]!["items"] is JsonArray).IsTrue();
+        await Reject(token, ("crawler", source.Replace("[{\"$ref\":\"#/components/schemas/CrawlerLogID\"}]", "[{\"type\":\"string\"},{\"type\":\"integer\"}]", StringComparison.Ordinal)));
+    }
+
+    [Test]
     public async Task Duplicate_source_operation_ids_are_disambiguated_unless_a_link_is_ambiguous(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
