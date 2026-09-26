@@ -21,7 +21,10 @@ internal static class JsonTraversal
         if (kind == ObjectKind.Schema && node is JsonValue scalar && scalar.TryGetValue(out bool boolean))
         {
             JsonObject replacement = boolean ? new JsonObject() : new JsonObject { ["not"] = new JsonObject() };
-            node.ReplaceWith(replacement);
+            if (node.Parent is JsonObject parentObject)
+                parentObject[node.GetPropertyName()] = replacement;
+            else if (node.Parent is JsonArray parentArray)
+                parentArray[parentArray.IndexOf(node)] = replacement;
             node = replacement;
         }
         if (node is not JsonObject obj)

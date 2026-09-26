@@ -278,9 +278,9 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
                     MergeMetadata(merged, key, value, "document");
             }
             if (postmanMetadata.Count > 0)
-                postmanCollections.Add(new JsonObject { ["prefix"] = source.Prefix, ["metadata"] = postmanMetadata });
+                postmanCollections.Add((JsonNode?)new JsonObject { ["prefix"] = source.Prefix, ["metadata"] = postmanMetadata });
             if (scopedMetadata.Count > 0)
-                documentMetadata.Add(new JsonObject { ["prefix"] = source.Prefix, ["metadata"] = scopedMetadata });
+                documentMetadata.Add((JsonNode?)new JsonObject { ["prefix"] = source.Prefix, ["metadata"] = scopedMetadata });
         }
         if (postmanCollections.Count > 0)
             MergeMetadata(merged, "x-merged-postman-collections", postmanCollections, "document");
@@ -530,7 +530,7 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
         {
             var values = new JsonArray(constant?.DeepClone());
             if (schema.ContainsKey("enum"))
-                (schema["allOf"] ??= new JsonArray()).AsArray().Add(new JsonObject { ["enum"] = values });
+                (schema["allOf"] ??= new JsonArray()).AsArray().Add((JsonNode?)new JsonObject { ["enum"] = values });
             else
                 schema["enum"] = values;
             schema.Remove("const");
