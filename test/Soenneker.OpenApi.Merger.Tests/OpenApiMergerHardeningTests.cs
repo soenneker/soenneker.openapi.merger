@@ -136,13 +136,35 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Still_rejects_conflicting_unknown_extensions(CancellationToken token)
+    [Arguments("\"first\"", "\"second\"")]
+    [Arguments("{\"tier\":[\"pro\"]}", "{\"tier\":[\"enterprise\"]}")]
+    [Arguments("[1,2]", "[2,3]")]
+    [Arguments("null", "false")]
+    public async Task Preserves_conflicting_document_extensions_per_source(string firstValue, string secondValue, CancellationToken token)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
-        first["x-custom"] = "first";
+        first["x-custom"] = JsonNode.Parse(firstValue);
+        first["x-common"] = new JsonObject { ["enabled"] = true };
         JsonObject second = (JsonObject)first.DeepClone();
-        second["x-custom"] = "second";
-        await Reject(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        second["x-custom"] = JsonNode.Parse(secondValue);
+        second["paths"]!["/items"]!["get"]!["x-custom"] = "operation metadata";
+        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        await Assert.That(merged.ContainsKey("x-custom")).IsFalse();
+        await Assert.That(JsonNode.DeepEquals(merged["x-common"], first["x-common"])).IsTrue();
+        JsonArray metadata = merged["x-merged-document-metadata"]!.AsArray();
+        await Assert.That(metadata.Count).IsEqualTo(2);
+        for (int i = 0; i < 2; i++)
+        {
+            await Assert.That(metadata[i]!["prefix"]!.GetValue<string>()).IsEqualTo(i == 0 ? "first" : "second");
+            JsonObject scoped = metadata[i]!["metadata"]!.AsObject();
+            await Assert.That(scoped.ContainsKey("x-custom")).IsTrue();
+            await Assert.That(JsonNode.DeepEquals(scoped["x-custom"], i == 0 ? first["x-custom"] : second["x-custom"])).IsTrue();
+        }
+        await Assert.That(merged["paths"]!["/second/items"]!["get"]!["x-custom"]!.GetValue<string>()).IsEqualTo("operation metadata");
+        JsonObject single = await MergeJson(token, ("first", first.ToJsonString()));
+        await Assert.That(single.ContainsKey("x-custom")).IsTrue();
+        await Assert.That(JsonNode.DeepEquals(single["x-custom"], first["x-custom"])).IsTrue();
+        await Assert.That(single.ContainsKey("x-merged-document-metadata")).IsFalse();
     }
 
     [Test]

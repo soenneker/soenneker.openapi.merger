@@ -255,6 +255,21 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
         foreach ((_, JsonObject root) in transformed)
             MergeComponents(merged, root);
 
+        var extensionValues = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
+        var conflictingExtensions = new HashSet<string>(StringComparer.Ordinal);
+        foreach ((_, JsonObject root) in transformed)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach ((string key, JsonNode? value) in root)
+            {
+                // Keep merger-owned containers strict to avoid overwriting their provenance.
+                if (!key.StartsWith("x-", StringComparison.Ordinal) || key is "x-merged-document-metadata" or "x-merged-postman-collections")
+                    continue;
+                if (!extensionValues.TryAdd(key, value) && !JsonNode.DeepEquals(extensionValues[key], value))
+                    conflictingExtensions.Add(key);
+            }
+        }
+
         var postmanCollections = new JsonArray();
         var documentMetadata = new JsonArray();
         foreach ((SourceDocument source, JsonObject root) in transformed)
@@ -271,8 +286,8 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
                 // In particular, collection variables and scripts must keep their original scope.
                 if (sources.Count > 1 && key is "x-postman-warnings" or "x-postman-variables" or "x-postman-events" or "x-postman-unmapped-requests")
                     postmanMetadata[key] = value?.DeepClone();
-                // Samples and tag groups describe their source document, not the combined API.
-                else if (sources.Count > 1 && key is "x-samples" or "x-tagGroups")
+                // Differing document extensions have no universal merge semantics; retain each source's value.
+                else if (conflictingExtensions.Contains(key) || (sources.Count > 1 && key is "x-samples" or "x-tagGroups"))
                     scopedMetadata[key] = value?.DeepClone();
                 else
                     MergeMetadata(merged, key, value, "document");

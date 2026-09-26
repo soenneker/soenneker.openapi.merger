@@ -22,6 +22,8 @@ public interface IOpenApiMerger
     /// in <paramref name="inputs"/>. Broken references are never replaced with unconstrained schemas.
     /// When merging multiple sources, document-level x-samples and x-tagGroups are retained per source prefix
     /// under x-merged-document-metadata, rather than being treated as global metadata.
+    /// Other document-level extensions with differing values are also retained there per source; identical values
+    /// remain at the document root. Merger-owned metadata containers and conflicting operation contracts remain strict.
     /// Component-only documents may omit paths. Relative YAML references also resolve to an included same-directory,
     /// same-stem JSON file when the original filename is absent. Duplicate operation IDs are disambiguated;
     /// links to an ambiguous source operation ID still fail rather than selecting an arbitrary target.
