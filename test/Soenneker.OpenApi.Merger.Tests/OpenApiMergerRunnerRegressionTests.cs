@@ -13,7 +13,7 @@ public sealed partial class OpenApiMergerTests
     [Test]
     [Arguments(false)]
     [Arguments(true)]
-    public async Task Merges_Algolia_single_item_schema_arrays(bool mixedVersions, CancellationToken token)
+    public async ValueTask Merges_Algolia_single_item_schema_arrays(bool mixedVersions, CancellationToken token)
     {
         const string source = """
             {"openapi":"3.0.2","info":{"title":"Crawler API","version":"1"},"paths":{
@@ -40,7 +40,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Duplicate_source_operation_ids_are_disambiguated_unless_a_link_is_ambiguous(CancellationToken token)
+    public async ValueTask Duplicate_source_operation_ids_are_disambiguated_unless_a_link_is_ambiguous(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["paths"]!["/other"] = source["paths"]!["/items"]!.DeepClone();
@@ -52,7 +52,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Merges_component_only_documents_and_converted_yaml_references(CancellationToken token)
+    public async ValueTask Merges_component_only_documents_and_converted_yaml_references(CancellationToken token)
     {
         string directory = Path.Combine(Path.GetTempPath(), "merger-converted-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);

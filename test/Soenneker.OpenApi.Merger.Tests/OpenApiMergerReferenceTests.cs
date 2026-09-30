@@ -11,7 +11,7 @@ public sealed partial class OpenApiMergerTests
     [Test]
     [Arguments(false)]
     [Arguments(true)]
-    public async Task Schema_reference_siblings_are_rewritten_once_after_component_collisions(bool shadowRenamedTarget, CancellationToken token)
+    public async ValueTask Schema_reference_siblings_are_rewritten_once_after_component_collisions(bool shadowRenamedTarget, CancellationToken token)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["openapi"] = "3.1.0";
@@ -36,7 +36,7 @@ public sealed partial class OpenApiMergerTests
     [Arguments("3.0.3", true)]
     [Arguments("3.1.1", false)]
     [Arguments("3.1.1", true)]
-    public async Task Preserves_LinkedIn_path_template_names_and_links(string version, bool referencedParameter, CancellationToken token)
+    public async ValueTask Preserves_LinkedIn_path_template_names_and_links(string version, bool referencedParameter, CancellationToken token)
     {
         const string path = "/posts/{encoded ugcPostUrn|shareUrn}";
         const string name = "encoded ugcPostUrn|shareUrn";
@@ -78,7 +78,7 @@ public sealed partial class OpenApiMergerTests
     [Arguments("/posts/{id")]
     [Arguments("/posts/{}")]
     [Arguments("/posts/{nested{id}}")]
-    public async Task Rejects_invalid_literal_paths_and_malformed_templates(string path, CancellationToken token)
+    public async ValueTask Rejects_invalid_literal_paths_and_malformed_templates(string path, CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         JsonObject pathItem = (JsonObject)source["paths"]!["/items"]!.DeepClone();
@@ -88,7 +88,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Collision_renames_are_atomic_for_security_and_component_references(CancellationToken token)
+    public async ValueTask Collision_renames_are_atomic_for_security_and_component_references(CancellationToken token)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["components"] = JsonNode.Parse("""{"schemas":{"Model":{"type":"string"}},"securitySchemes":{"key":{"type":"apiKey","in":"header","name":"X-Key"}}}""");
@@ -106,7 +106,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task References_use_uri_decoding_and_json_pointer_escaping(CancellationToken token)
+    public async ValueTask References_use_uri_decoding_and_json_pointer_escaping(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["components"] = JsonNode.Parse("""{"schemas":{"odd/name~value":{"type":"object","properties":{"a/b~c":{"type":"string"}}},"Alias":{"$ref":"#/components/schemas/odd~1name~0value/properties/a~1b~0c"},"percent%2F":{"type":"integer"},"PercentAlias":{"$ref":"#/components/schemas/percent%252F"}}}""");
@@ -118,14 +118,14 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Prefix_matching_is_case_sensitive(CancellationToken token)
+    public async ValueTask Prefix_matching_is_case_sensitive(CancellationToken token)
     {
         JsonObject merged = await MergeJson(token, ("api", Minimal.Replace("/items", "/API/items", StringComparison.Ordinal)));
         await Assert.That(merged["paths"]!["/api/API/items"] != null).IsTrue();
     }
 
     [Test]
-    public async Task Callback_operation_ids_and_links_are_namespaced(CancellationToken token)
+    public async ValueTask Callback_operation_ids_and_links_are_namespaced(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["paths"]!["/items"]!["get"]!["callbacks"] = JsonNode.Parse("""{"onEvent":{"{$request.query.callbackUrl}":{"post":{"operationId":"event","responses":{"200":{"description":"OK","links":{"list":{"operationId":"list"}}}}}}}}""");
@@ -136,7 +136,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Operation_parameters_override_path_parameters(CancellationToken token)
+    public async ValueTask Operation_parameters_override_path_parameters(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["paths"]!["/items"]!["parameters"] = JsonNode.Parse("""[{"in":"query","name":"limit","schema":{"type":"integer","maximum":100}}]""");
@@ -148,7 +148,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task AllOf_discriminator_values_and_schema_anchors_survive_collisions(CancellationToken token)
+    public async ValueTask AllOf_discriminator_values_and_schema_anchors_survive_collisions(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["openapi"] = "3.1.1";
@@ -159,7 +159,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Equivalent_path_templates_with_different_variable_names_are_rejected(CancellationToken token)
+    public async ValueTask Equivalent_path_templates_with_different_variable_names_are_rejected(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["paths"]!["/items/{id}"] = JsonNode.Parse("""{"get":{"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"OK"}}}}""");
@@ -168,7 +168,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Missing_security_cannot_bind_to_a_different_source(CancellationToken token)
+    public async ValueTask Missing_security_cannot_bind_to_a_different_source(CancellationToken token)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["components"] = JsonNode.Parse("""{"securitySchemes":{"key":{"type":"apiKey","in":"header","name":"X-Key"}}}""");
@@ -178,7 +178,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Preserves_advanced_31_schema_keywords_and_validates_nested_refs(CancellationToken token)
+    public async ValueTask Preserves_advanced_31_schema_keywords_and_validates_nested_refs(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["openapi"] = "3.1.1";
@@ -192,7 +192,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Non_string_constants_and_reference_siblings_preserve_constraints(CancellationToken token)
+    public async ValueTask Non_string_constants_and_reference_siblings_preserve_constraints(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["openapi"] = "3.1.1";
@@ -208,7 +208,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Rejects_reference_targets_of_the_wrong_OpenApi_type(CancellationToken token)
+    public async ValueTask Rejects_reference_targets_of_the_wrong_OpenApi_type(CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["components"] = JsonNode.Parse("""{"schemas":{"Invalid":{"$ref":"#/paths/~1items/get/responses/200"}}}""");
@@ -219,7 +219,7 @@ public sealed partial class OpenApiMergerTests
     [Arguments("{\"prefixItems\":[42]}")]
     [Arguments("{\"anyOf\":[]}")]
     [Arguments("{\"properties\":{\"bad\":null}}")]
-    public async Task Rejects_invalid_schema_keyword_shapes(string schema, CancellationToken token)
+    public async ValueTask Rejects_invalid_schema_keyword_shapes(string schema, CancellationToken token)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["openapi"] = "3.1.1";
@@ -228,7 +228,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async Task Cancellation_is_not_swallowed(CancellationToken token)
+    public async ValueTask Cancellation_is_not_swallowed(CancellationToken token)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
         cancellation.Cancel();
