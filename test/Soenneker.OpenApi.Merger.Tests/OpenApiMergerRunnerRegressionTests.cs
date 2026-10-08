@@ -13,7 +13,7 @@ public sealed partial class OpenApiMergerTests
     [Test]
     [Arguments(false)]
     [Arguments(true)]
-    public async ValueTask Merges_Algolia_single_item_schema_arrays(bool mixedVersions, CancellationToken token)
+    public async ValueTask Merges_Algolia_single_item_schema_arrays(bool mixedVersions, CancellationToken cancellationToken)
     {
         const string source = """
             {"openapi":"3.0.2","info":{"title":"Crawler API","version":"1"},"paths":{
@@ -24,8 +24,8 @@ public sealed partial class OpenApiMergerTests
               }}},"components":{"schemas":{"CrawlerLogID":{"type":"string","pattern":"^[0-9]+$"}}}}
             """;
         JsonObject merged = mixedVersions
-            ? await MergeJson(token, ("crawler", source), ("other", """{"openapi":"3.1.0","info":{"title":"Other","version":"1"},"paths":{}}"""))
-            : await MergeJson(token, ("crawler", source));
+            ? await MergeJson(cancellationToken, ("crawler", source), ("other", """{"openapi":"3.1.0","info":{"title":"Other","version":"1"},"paths":{}}"""))
+            : await MergeJson(cancellationToken, ("crawler", source));
         JsonNode operation = merged["paths"]!["/crawler/1/crawlers/{id}/delete_runs"]!["post"]!;
         JsonNode request = operation["requestBody"]!["content"]!["application/json"]!;
         JsonNode response = operation["responses"]!["200"]!["content"]!["application/json"]!;
@@ -36,23 +36,23 @@ public sealed partial class OpenApiMergerTests
         }
         await Assert.That(merged["components"]!["schemas"]!["CrawlerLogID"]!["pattern"]!.GetValue<string>()).IsEqualTo("^[0-9]+$");
         await Assert.That(request["example"]!["items"] is JsonArray).IsTrue();
-        await Reject(token, ("crawler", source.Replace("[{\"$ref\":\"#/components/schemas/CrawlerLogID\"}]", "[{\"type\":\"string\"},{\"type\":\"integer\"}]", StringComparison.Ordinal)));
+        await Reject(cancellationToken, ("crawler", source.Replace("[{\"$ref\":\"#/components/schemas/CrawlerLogID\"}]", "[{\"type\":\"string\"},{\"type\":\"integer\"}]", StringComparison.Ordinal)));
     }
 
     [Test]
-    public async ValueTask Duplicate_source_operation_ids_are_disambiguated_unless_a_link_is_ambiguous(CancellationToken token)
+    public async ValueTask Duplicate_source_operation_ids_are_disambiguated_unless_a_link_is_ambiguous(CancellationToken cancellationToken)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["paths"]!["/other"] = source["paths"]!["/items"]!.DeepClone();
-        JsonObject merged = await MergeJson(token, ("api", source.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("api", source.ToJsonString()));
         string[] ids = merged["paths"]!.AsObject().Select(p => p.Value!["get"]!["operationId"]!.GetValue<string>()).ToArray();
         await Assert.That(ids.Distinct().Count()).IsEqualTo(2);
         source["paths"]!["/items"]!["get"]!["responses"]!["200"]!["links"] = JsonNode.Parse("""{"next":{"operationId":"list"}}""");
-        await Reject(token, ("api", source.ToJsonString()));
+        await Reject(cancellationToken, ("api", source.ToJsonString()));
     }
 
     [Test]
-    public async ValueTask Merges_component_only_documents_and_converted_yaml_references(CancellationToken token)
+    public async ValueTask Merges_component_only_documents_and_converted_yaml_references(CancellationToken cancellationToken)
     {
         string directory = Path.Combine(Path.GetTempPath(), "merger-converted-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -61,11 +61,11 @@ public sealed partial class OpenApiMergerTests
             JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
             source["paths"]!["/items"]!["get"]!["responses"]!["200"]!["content"] =
                 JsonNode.Parse("""{"application/json":{"schema":{"$ref":"numbers.yml#/components/schemas/Number"}}}""");
-            await _fileUtil.Write(Path.Combine(directory, "api.json"), source.ToJsonString(), cancellationToken: token);
+            await _fileUtil.Write(Path.Combine(directory, "api.json"), source.ToJsonString(), cancellationToken: cancellationToken);
             await _fileUtil.Write(Path.Combine(directory, "numbers.json"), """
                 {"openapi":"3.0.3","info":{"title":"Shared","version":"1"},"components":{"schemas":{"Number":{"type":"string","pattern":"^[0-9]+$"}}}}
-                """, cancellationToken: token);
-            JsonNode merged = JsonNode.Parse(_util.ToJson(await _util.MergeDirectory(directory, token)))!;
+                """, cancellationToken: cancellationToken);
+            JsonNode merged = JsonNode.Parse(_util.ToJson(await _util.MergeDirectory(directory, cancellationToken)))!;
             await Assert.That(merged["paths"]!.AsObject().Count).IsEqualTo(1);
             await Assert.That(merged["components"]!["schemas"]!["Number"]!["pattern"]!.GetValue<string>()).IsEqualTo("^[0-9]+$");
             await Assert.That(merged["paths"]!["/api/items"]!["get"]!["responses"]!["200"]!["content"]!["application/json"]!["schema"]!["$ref"]!.GetValue<string>())

@@ -39,7 +39,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async ValueTask Duplicate_operations_keep_response_examples_and_fill_missing_media_schemas(CancellationToken token)
+    public async ValueTask Duplicate_operations_keep_response_examples_and_fill_missing_media_schemas(CancellationToken cancellationToken)
     {
         const string first = """
             {"openapi":"3.0.3","info":{"title":"API","version":"1"},"paths":{"/items":{"get":{"responses":{"200":{"description":"OK","content":{"application/json":{"example":{"at":1}}}}}}}}}
@@ -49,7 +49,7 @@ public sealed partial class OpenApiMergerTests
             """;
         foreach (bool reverse in new[] { false, true })
         {
-            JsonObject result = await MergeJson(token, ("api", reverse ? second : first), ("api", reverse ? first : second));
+            JsonObject result = await MergeJson(cancellationToken, ("api", reverse ? second : first), ("api", reverse ? first : second));
             JsonNode media = result["paths"]!["/api/items"]!["get"]!["responses"]!["200"]!["content"]!["application/json"]!;
             await Assert.That(media["schema"]!["properties"]!["at"]!["format"]!.ToString()).IsEqualTo("int64");
             await Assert.That(media["examples"]!.AsObject().Count).IsEqualTo(2);
@@ -66,14 +66,14 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async ValueTask Equivalent_referenced_responses_keep_examples_from_both_components(CancellationToken token)
+    public async ValueTask Equivalent_referenced_responses_keep_examples_from_both_components(CancellationToken cancellationToken)
     {
         const string spec = """
             {"openapi":"3.0.3","info":{"title":"API","version":"1"},"paths":{"/items":{"get":{"responses":{"200":{"$ref":"#/components/responses/Result"}}}}},"components":{"responses":{"Result":{"description":"OK","content":{"application/json":{"schema":{"type":"object","properties":{"at":{"type":"integer","format":"int64"}}},"examples":{"saved":{"value":{"at":1}}}}}}}}}
             """;
         JsonObject second = JsonNode.Parse(spec)!.AsObject();
         second["components"]!["responses"]!["Result"]!["content"]!["application/json"]!["examples"]!["saved"]!["value"]!["at"] = 1760631246905L;
-        JsonObject merged = await MergeJson(token, ("api", spec), ("api", second.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("api", spec), ("api", second.ToJsonString()));
         string reference = merged["paths"]!["/api/items"]!["get"]!["responses"]!["200"]!["$ref"]!.ToString();
         JsonNode target = merged;
         foreach (string segment in reference[2..].Split('/')) target = target[segment]!;
@@ -81,7 +81,7 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async ValueTask Preserves_samples_and_tag_groups_scoped_to_source_documents(CancellationToken token)
+    public async ValueTask Preserves_samples_and_tag_groups_scoped_to_source_documents(CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["x-samples"] = JsonNode.Parse("""[{"$ref":"literal-sample","name":"first"}]""");
@@ -89,7 +89,7 @@ public sealed partial class OpenApiMergerTests
         JsonObject second = (JsonObject)first.DeepClone();
         second["x-samples"]![0]!["name"] = "second";
         second["x-tagGroups"]![0]!["name"] = "Second";
-        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
         JsonArray metadata = merged["x-merged-document-metadata"]!.AsArray();
         await Assert.That(metadata.Count).IsEqualTo(2);
         for (int i = 0; i < 2; i++)
@@ -100,13 +100,13 @@ public sealed partial class OpenApiMergerTests
                 await Assert.That(JsonNode.DeepEquals(metadata[i]!["metadata"]![key], original[key])).IsTrue();
         }
         await Assert.That(merged["x-samples"]).IsNull();
-        JsonObject single = await MergeJson(token, ("first", first.ToJsonString()));
+        JsonObject single = await MergeJson(cancellationToken, ("first", first.ToJsonString()));
         await Assert.That(JsonNode.DeepEquals(single["x-samples"], first["x-samples"])).IsTrue();
         await Assert.That(single["x-merged-document-metadata"]).IsNull();
     }
 
     [Test]
-    public async ValueTask Preserves_Postman_metadata_scoped_to_each_collection(CancellationToken token)
+    public async ValueTask Preserves_Postman_metadata_scoped_to_each_collection(CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["x-postman-warnings"] = new JsonArray("First warning");
@@ -117,7 +117,7 @@ public sealed partial class OpenApiMergerTests
         second["x-postman-warnings"] = new JsonArray("Second warning");
         second["x-postman-variables"]![0]!["value"] = "https://second.example";
         second["x-postman-events"]![0]!["script"]!["exec"]![0] = "second()";
-        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
         JsonArray collections = merged["x-merged-postman-collections"]!.AsArray();
         await Assert.That(collections.Count).IsEqualTo(2);
         for (int i = 0; i < 2; i++)
@@ -130,7 +130,7 @@ public sealed partial class OpenApiMergerTests
                 await Assert.That(JsonNode.DeepEquals(collections[i]!["metadata"]![key], original[key])).IsTrue();
             }
         }
-        JsonObject single = await MergeJson(token, ("first", first.ToJsonString()));
+        JsonObject single = await MergeJson(cancellationToken, ("first", first.ToJsonString()));
         await Assert.That(JsonNode.DeepEquals(single["x-postman-variables"], first["x-postman-variables"])).IsTrue();
         await Assert.That(single.ContainsKey("x-merged-postman-collections")).IsFalse();
     }
@@ -140,7 +140,7 @@ public sealed partial class OpenApiMergerTests
     [Arguments("{\"tier\":[\"pro\"]}", "{\"tier\":[\"enterprise\"]}")]
     [Arguments("[1,2]", "[2,3]")]
     [Arguments("null", "false")]
-    public async ValueTask Preserves_conflicting_document_extensions_per_source(string firstValue, string secondValue, CancellationToken token)
+    public async ValueTask Preserves_conflicting_document_extensions_per_source(string firstValue, string secondValue, CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["x-custom"] = JsonNode.Parse(firstValue);
@@ -148,7 +148,7 @@ public sealed partial class OpenApiMergerTests
         JsonObject second = (JsonObject)first.DeepClone();
         second["x-custom"] = JsonNode.Parse(secondValue);
         second["paths"]!["/items"]!["get"]!["x-custom"] = "operation metadata";
-        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
         await Assert.That(merged.ContainsKey("x-custom")).IsFalse();
         await Assert.That(JsonNode.DeepEquals(merged["x-common"], first["x-common"])).IsTrue();
         JsonArray metadata = merged["x-merged-document-metadata"]!.AsArray();
@@ -161,14 +161,14 @@ public sealed partial class OpenApiMergerTests
             await Assert.That(JsonNode.DeepEquals(scoped["x-custom"], i == 0 ? first["x-custom"] : second["x-custom"])).IsTrue();
         }
         await Assert.That(merged["paths"]!["/second/items"]!["get"]!["x-custom"]!.GetValue<string>()).IsEqualTo("operation metadata");
-        JsonObject single = await MergeJson(token, ("first", first.ToJsonString()));
+        JsonObject single = await MergeJson(cancellationToken, ("first", first.ToJsonString()));
         await Assert.That(single.ContainsKey("x-custom")).IsTrue();
         await Assert.That(JsonNode.DeepEquals(single["x-custom"], first["x-custom"])).IsTrue();
         await Assert.That(single.ContainsKey("x-merged-document-metadata")).IsFalse();
     }
 
     [Test]
-    public async ValueTask Preserves_inherited_security_servers_and_explicit_anonymous_access(CancellationToken token)
+    public async ValueTask Preserves_inherited_security_servers_and_explicit_anonymous_access(CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["security"] = JsonNode.Parse("""[{"key":[]}]""");
@@ -177,7 +177,7 @@ public sealed partial class OpenApiMergerTests
         first["paths"]!["/public"] = JsonNode.Parse("""{"get":{"security":[],"responses":{"200":{"description":"OK"}}}}""");
         JsonObject second = (JsonObject)first.DeepClone();
         second["servers"] = JsonNode.Parse("""[{"url":"https://second.example/v2"}]""");
-        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
         await Assert.That(merged["paths"]!["/first/items"]!["get"]!["security"]![0]!["key"] is JsonArray).IsTrue();
         await Assert.That(merged["paths"]!["/second/items"]!["get"]!["security"]![0]!["second_key"] is JsonArray).IsTrue();
         await Assert.That(merged["paths"]!["/first/public"]!["get"]!["security"]!.AsArray().Count).IsEqualTo(0);
@@ -188,7 +188,7 @@ public sealed partial class OpenApiMergerTests
     [Arguments("security")]
     [Arguments("servers")]
     [Arguments("parameters")]
-    public async ValueTask Rejects_conflicting_inherited_contracts(string field, CancellationToken token)
+    public async ValueTask Rejects_conflicting_inherited_contracts(string field, CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         JsonObject second = (JsonObject)first.DeepClone();
@@ -201,11 +201,11 @@ public sealed partial class OpenApiMergerTests
             second["servers"] = JsonNode.Parse("""[{"url":"https://second.example"}]""");
         else
             second["paths"]!["/items"]!["parameters"] = JsonNode.Parse("""[{"name":"limit","in":"query","schema":{"type":"integer"}}]""");
-        await Reject(token, ("api", first.ToJsonString()), ("api", second.ToJsonString()));
+        await Reject(cancellationToken, ("api", first.ToJsonString()), ("api", second.ToJsonString()));
     }
 
     [Test]
-    public async ValueTask Preserves_method_specific_parameters_when_combining_paths(CancellationToken token)
+    public async ValueTask Preserves_method_specific_parameters_when_combining_paths(CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         JsonObject second = (JsonObject)first.DeepClone();
@@ -213,7 +213,7 @@ public sealed partial class OpenApiMergerTests
         second["paths"]!["/items"]!["post"] = second["paths"]!["/items"]!["get"]!.DeepClone();
         second["paths"]!["/items"]!.AsObject().Remove("get");
         second["paths"]!["/items"]!["parameters"] = JsonNode.Parse("""[{"name":"token","in":"header","schema":{"type":"string"}}]""");
-        JsonObject merged = await MergeJson(token, ("api", first.ToJsonString()), ("api", second.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("api", first.ToJsonString()), ("api", second.ToJsonString()));
         await Assert.That(merged["paths"]!["/api/items"]!["get"]!["parameters"]![0]!["name"]!.GetValue<string>()).IsEqualTo("limit");
         await Assert.That(merged["paths"]!["/api/items"]!["post"]!["parameters"]![0]!["name"]!.GetValue<string>()).IsEqualTo("token");
     }
@@ -223,7 +223,7 @@ public sealed partial class OpenApiMergerTests
     [Arguments("summary")]
     [Arguments("example")]
     [Arguments("examples")]
-    public async ValueTask Schema_properties_named_like_documentation_are_part_of_the_contract(string name, CancellationToken token)
+    public async ValueTask Schema_properties_named_like_documentation_are_part_of_the_contract(string name, CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["paths"]!["/items"]!["get"]!["responses"]!["200"]!["content"] = JsonNode.Parse("""{"application/json":{"schema":{"type":"object","properties":{}}}}""");
@@ -231,31 +231,31 @@ public sealed partial class OpenApiMergerTests
         properties[name] = JsonNode.Parse("""{"type":"string"}""");
         JsonObject second = (JsonObject)first.DeepClone();
         second["paths"]!["/items"]!["get"]!["responses"]!["200"]!["content"]!["application/json"]!["schema"]!["properties"]![name]!["type"] = "integer";
-        await Reject(token, ("api", first.ToJsonString()), ("api", second.ToJsonString()));
+        await Reject(cancellationToken, ("api", first.ToJsonString()), ("api", second.ToJsonString()));
     }
 
     [Test]
-    public async ValueTask Does_not_rewrite_payloads_or_extensions(CancellationToken token)
+    public async ValueTask Does_not_rewrite_payloads_or_extensions(CancellationToken cancellationToken)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         const string payload = """{"$ref":"#/components/schemas/Missing","security":[{"notAScheme":[]}],"operationId":"literal","discriminator":{"mapping":{"value":"missing"}}}""";
         source["paths"]!["/items"]!["get"]!["responses"]!["200"]!["content"] = JsonNode.Parse("""{"application/json":{"schema":{"type":"object"},"example":{}}}""");
         source["paths"]!["/items"]!["get"]!["responses"]!["200"]!["content"]!["application/json"]!["example"] = JsonNode.Parse(payload);
         source["x-data"] = JsonNode.Parse(payload);
-        JsonObject merged = await MergeJson(token, ("api", source.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("api", source.ToJsonString()));
         await Assert.That(JsonNode.DeepEquals(merged["x-data"], JsonNode.Parse(payload))).IsTrue();
         await Assert.That(JsonNode.DeepEquals(merged["paths"]!["/api/items"]!["get"]!["responses"]!["200"]!["content"]!["application/json"]!["example"], JsonNode.Parse(payload))).IsTrue();
     }
 
     [Test]
-    public async ValueTask Rewrites_operation_links_and_resolves_relative_components(CancellationToken token)
+    public async ValueTask Rewrites_operation_links_and_resolves_relative_components(CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["paths"]!["/items"]!["get"]!["responses"]!["200"]!["links"] = JsonNode.Parse("""{"next":{"operationId":"list"},"self":{"operationRef":"#/paths/~1items/get"}}""");
         first["paths"]!["/items"]!["get"]!["responses"]!["200"]!["content"] = JsonNode.Parse("""{"application/json":{"schema":{"$ref":"1.json#/components/schemas/Result"}}}""");
         JsonObject second = JsonNode.Parse(Minimal)!.AsObject();
         second["components"] = JsonNode.Parse("""{"schemas":{"Result":{"type":"string"}}}""");
-        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
         JsonNode response = merged["paths"]!["/first/items"]!["get"]!["responses"]!["200"]!;
         await Assert.That(response["links"]!["next"]!["operationRef"]!.GetValue<string>()).IsEqualTo("#/paths/~1first~1items/get");
         await Assert.That(response["links"]!["self"]!["operationRef"]!.GetValue<string>()).IsEqualTo("#/paths/~1first~1items/get");
@@ -266,23 +266,23 @@ public sealed partial class OpenApiMergerTests
     [Arguments("#/components/schemas/Result/properties/missing")]
     [Arguments("missing.json#/components/schemas/Result")]
     [Arguments("https://example.com/openapi.json#/components/schemas/Result")]
-    public async ValueTask Rejects_unresolved_and_unbundled_references(string reference, CancellationToken token)
+    public async ValueTask Rejects_unresolved_and_unbundled_references(string reference, CancellationToken cancellationToken)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["components"] = JsonNode.Parse("""{"schemas":{"Result":{"type":"object","properties":{"id":{"type":"string"}}},"Other":{}}}""");
         source["components"]!["schemas"]!["Other"]!["$ref"] = reference;
-        await Reject(token, ("api", source.ToJsonString()));
+        await Reject(cancellationToken, ("api", source.ToJsonString()));
     }
 
     [Test]
-    public async ValueTask Preserves_OpenApi31_webhooks_boolean_schemas_and_null_unions(CancellationToken token)
+    public async ValueTask Preserves_OpenApi31_webhooks_boolean_schemas_and_null_unions(CancellationToken cancellationToken)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["openapi"] = "3.1.1";
         source["components"] = JsonNode.Parse("""{"schemas":{"Choice":{"type":["string","null"],"const":"fixed"},"Never":false},"pathItems":{"Shared":{"get":{"responses":{"200":{"description":"OK"}}}}}}""");
         source["webhooks"] = JsonNode.Parse("""{"event":{"post":{"responses":{"200":{"description":"OK"}}}}}""");
         source["paths"]!["/shared"] = JsonNode.Parse("""{"$ref":"#/components/pathItems/Shared"}""");
-        JsonObject merged = await MergeJson(token, ("api", source.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("api", source.ToJsonString()));
         await Assert.That(merged["openapi"]!.GetValue<string>().StartsWith("3.1.", StringComparison.Ordinal)).IsTrue();
         await Assert.That(merged["components"]!["schemas"]!["Choice"]!["type"]!.AsArray().Count).IsEqualTo(2);
         await Assert.That(merged["components"]!["schemas"]!["Never"]!["not"] is JsonObject).IsTrue();
@@ -292,55 +292,55 @@ public sealed partial class OpenApiMergerTests
     }
 
     [Test]
-    public async ValueTask Mixed_versions_upgrade_nullable_without_dropping_constraints(CancellationToken token)
+    public async ValueTask Mixed_versions_upgrade_nullable_without_dropping_constraints(CancellationToken cancellationToken)
     {
         JsonObject first = JsonNode.Parse(Minimal)!.AsObject();
         first["components"] = JsonNode.Parse("""{"schemas":{"Value":{"type":"string","nullable":true,"minLength":3}}}""");
         JsonObject second = JsonNode.Parse(Minimal)!.AsObject();
         second["openapi"] = "3.1.1";
-        JsonObject merged = await MergeJson(token, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("first", first.ToJsonString()), ("second", second.ToJsonString()));
         await Assert.That(merged["components"]!["schemas"]!["Value"]!["type"]!.AsArray().Any(node => node!.GetValue<string>() == "null")).IsTrue();
         await Assert.That(merged["components"]!["schemas"]!["Value"]!["minLength"]!.GetValue<int>()).IsEqualTo(3);
     }
 
     [Test]
-    public async ValueTask Preserves_implicit_discriminator_values_after_schema_collision(CancellationToken token)
+    public async ValueTask Preserves_implicit_discriminator_values_after_schema_collision(CancellationToken cancellationToken)
     {
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["components"] = JsonNode.Parse("""{"schemas":{"Animal":{"oneOf":[{"$ref":"#/components/schemas/Dog"}],"discriminator":{"propertyName":"kind"}},"Dog":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string"}}}}}""");
-        JsonObject merged = await MergeJson(token, ("first", source.ToJsonString()), ("second", source.ToJsonString()));
+        JsonObject merged = await MergeJson(cancellationToken, ("first", source.ToJsonString()), ("second", source.ToJsonString()));
         await Assert.That(merged["components"]!["schemas"]!["second_Animal"]!["discriminator"]!["mapping"]!["Dog"]!.GetValue<string>()).IsEqualTo("#/components/schemas/second_Dog");
     }
 
     [Test]
-    public async ValueTask Rejects_invalid_path_templates_and_missing_responses(CancellationToken token)
+    public async ValueTask Rejects_invalid_path_templates_and_missing_responses(CancellationToken cancellationToken)
     {
-        await Reject(token, ("api", Minimal.Replace("/items", "/items/{id}", StringComparison.Ordinal)));
+        await Reject(cancellationToken, ("api", Minimal.Replace("/items", "/items/{id}", StringComparison.Ordinal)));
         JsonObject source = JsonNode.Parse(Minimal)!.AsObject();
         source["paths"]!["/items"]!["get"]!.AsObject().Remove("responses");
-        await Reject(token, ("api", source.ToJsonString()));
+        await Reject(cancellationToken, ("api", source.ToJsonString()));
     }
 
     [Test]
-    public async ValueTask Rejects_duplicate_json_keys(CancellationToken token)
+    public async ValueTask Rejects_duplicate_json_keys(CancellationToken cancellationToken)
     {
-        await Reject(token, ("api", Minimal.Replace("\"operationId\":\"list\"", "\"operationId\":\"list\",\"operationId\":\"other\"", StringComparison.Ordinal)));
+        await Reject(cancellationToken, ("api", Minimal.Replace("\"operationId\":\"list\"", "\"operationId\":\"list\",\"operationId\":\"other\"", StringComparison.Ordinal)));
     }
 
     [Test]
-    public async ValueTask Directory_skips_unrelated_json_but_rejects_broken_OpenApi(CancellationToken token)
+    public async ValueTask Directory_skips_unrelated_json_but_rejects_broken_OpenApi(CancellationToken cancellationToken)
     {
         string directory = Path.Combine(Path.GetTempPath(), "openapi-merger-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {
-            await _fileUtil.Write(Path.Combine(directory, "api.json"), Minimal, cancellationToken: token);
-            await _fileUtil.Write(Path.Combine(directory, "package.json"), "{\"name\":\"package\"}", cancellationToken: token);
-            OpenApiDocument merged = await _util.MergeDirectory(directory, token);
+            await _fileUtil.Write(Path.Combine(directory, "api.json"), Minimal, cancellationToken: cancellationToken);
+            await _fileUtil.Write(Path.Combine(directory, "package.json"), "{\"name\":\"package\"}", cancellationToken: cancellationToken);
+            OpenApiDocument merged = await _util.MergeDirectory(directory, cancellationToken);
             await Assert.That(merged.Paths.Count).IsEqualTo(1);
-            await _fileUtil.Write(Path.Combine(directory, "broken.json"), "{\"openapi\":\"3.0.3\",", cancellationToken: token);
+            await _fileUtil.Write(Path.Combine(directory, "broken.json"), "{\"openapi\":\"3.0.3\",", cancellationToken: cancellationToken);
             bool rejected = false;
-            try { await _util.MergeDirectory(directory, token); }
+            try { await _util.MergeDirectory(directory, cancellationToken); }
             catch (InvalidOperationException) { rejected = true; }
             await Assert.That(rejected).IsTrue();
         }

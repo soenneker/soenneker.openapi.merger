@@ -118,9 +118,9 @@ public sealed partial class OpenApiMergerTests : HostedUnitTest
 
         try
         {
-            await _fileUtil.Write(firstPath, document);
+            await _fileUtil.Write(firstPath, document, cancellationToken: cancellationToken);
             string richerDocument = document.Replace("\"description\": \"OK\"", "\"description\": \"A more detailed successful response\"", StringComparison.Ordinal);
-            await _fileUtil.Write(secondPath, richerDocument);
+            await _fileUtil.Write(secondPath, richerDocument, cancellationToken: cancellationToken);
 
             OpenApiDocument merged = await _util.MergeOpenApis([("accounts", firstPath), ("billing", secondPath)], cancellationToken: cancellationToken);
 
