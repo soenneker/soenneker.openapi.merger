@@ -44,7 +44,7 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.OpenApi" Version="3.10.2" />
-        <PackageReference Include="Soenneker.Git.Util" Version="4.0.3845" />
-        <PackageReference Include="Soenneker.Utils.Yaml" Version="4.0.214" />
+        <PackageReference Include="Soenneker.Git.Util" Version="4.0.3851" />
+        <PackageReference Include="Soenneker.Utils.Yaml" Version="4.0.220" />
     </ItemGroup>
 </Project>
