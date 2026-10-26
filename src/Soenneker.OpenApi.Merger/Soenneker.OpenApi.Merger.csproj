@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
+        <TargetFramework>net11.0</TargetFramework>
         <Nullable>enable</Nullable>
         <IsAotCompatible>true</IsAotCompatible>
         <Platforms>AnyCPU</Platforms>
@@ -9,7 +9,7 @@
 
     <PropertyGroup>
         <Description>Merges OpenAPI documents with namespaced paths, components, and operation identifiers</Description>
-        <Version Condition="'$(BUILD_VERSION)' == ''">4.0.0</Version>
+        <Version Condition="'$(BUILD_VERSION)' == ''">11.0.0</Version>
         <Version Condition="'$(BUILD_VERSION)' != ''">$(BUILD_VERSION)</Version>
         <AssemblyName>Soenneker.OpenApi.Merger</AssemblyName>
         <PackageId>Soenneker.OpenApi.Merger</PackageId>
@@ -44,7 +44,7 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.OpenApi" Version="3.11.0" />
-        <PackageReference Include="Soenneker.Git.Util" Version="4.0.3857" />
+        <PackageReference Include="Soenneker.Git.Util" Version="4.0.3858" />
         <PackageReference Include="Soenneker.Utils.Yaml" Version="4.0.227" />
     </ItemGroup>
 </Project>
