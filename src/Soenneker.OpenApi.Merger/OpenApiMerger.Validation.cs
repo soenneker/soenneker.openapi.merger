@@ -212,9 +212,9 @@ public sealed partial class OpenApiMerger
                                          .ToHashSet(StringComparer.Ordinal);
         if (regularPath && Regex.Replace(path, "\\{[^{}]+\\}", "").IndexOfAny(['{', '}']) >= 0)
             throw new InvalidOperationException($"Malformed path template '{path}'.");
-        foreach ((string method, JsonNode? value) in pathItem)
+        foreach ((string method, JsonNode? value) in JsonTraversal.Operations(pathItem))
         {
-            if (!JsonTraversal.IsHttpMethod(method) || value is not JsonObject operation)
+            if (value is not JsonObject operation)
                 continue;
             var names = new HashSet<(string, string)>();
             var pathNames = new HashSet<string>(StringComparer.Ordinal);
@@ -226,7 +226,7 @@ public sealed partial class OpenApiMerger
                     parameter = ResolveObject(root, parameter);
                     string name = StringValue(parameter["name"]) ?? "";
                     string location = StringValue(parameter["in"]) ?? "";
-                    if (name.Length == 0 || location is not ("path" or "query" or "header" or "cookie") ||
+                    if (name.Length == 0 || location is not ("path" or "query" or "header" or "cookie" or "querystring") ||
                         !names.Add((name, location)))
                         throw new InvalidOperationException(
                             $"Invalid or duplicate parameter '{name}' in '{location}' for '{method}' at {pointer}.");

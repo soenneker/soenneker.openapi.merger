@@ -1,14 +1,9 @@
 using System;
 using System.Linq;
+using System.Collections.Generic;
 using System.Text.Json.Nodes;
 
 namespace Soenneker.OpenApi.Merger;
-
-internal enum ObjectKind
-{
-    Document, PathItem, Operation, Schema, Parameter, Header, Response, RequestBody, MediaType,
-    Encoding, SecurityScheme, Link, Callback, Example, Server, Tag
-}
 
 // Follow OpenAPI fields, never arbitrary user data (examples, defaults, extensions or property names).
 internal static class JsonTraversal
@@ -81,6 +76,7 @@ internal static class JsonTraversal
                 foreach ((string name, _) in obj.ToArray())
                     if (IsHttpMethod(name))
                         Child(name, ObjectKind.Operation);
+                Map("additionalOperations", ObjectKind.Operation);
                 Array("parameters", ObjectKind.Parameter);
                 Array("servers", ObjectKind.Server);
                 break;
@@ -115,11 +111,17 @@ internal static class JsonTraversal
                 break;
             case ObjectKind.MediaType:
                 Child("schema", ObjectKind.Schema);
+                Child("itemSchema", ObjectKind.Schema);
+                Child("itemEncoding", ObjectKind.Encoding);
+                Array("prefixEncoding", ObjectKind.Encoding);
                 Map("examples", ObjectKind.Example);
                 Map("encoding", ObjectKind.Encoding);
                 break;
             case ObjectKind.Encoding:
                 Map("headers", ObjectKind.Header);
+                Map("encoding", ObjectKind.Encoding);
+                Child("itemEncoding", ObjectKind.Encoding);
+                Array("prefixEncoding", ObjectKind.Encoding);
                 break;
             case ObjectKind.Link:
                 Child("server", ObjectKind.Server);
@@ -136,10 +138,20 @@ internal static class JsonTraversal
     [
         ("schemas", ObjectKind.Schema), ("parameters", ObjectKind.Parameter), ("responses", ObjectKind.Response),
         ("requestBodies", ObjectKind.RequestBody), ("headers", ObjectKind.Header), ("securitySchemes", ObjectKind.SecurityScheme),
-        ("links", ObjectKind.Link), ("callbacks", ObjectKind.Callback), ("examples", ObjectKind.Example), ("pathItems", ObjectKind.PathItem)
+        ("links", ObjectKind.Link), ("callbacks", ObjectKind.Callback), ("examples", ObjectKind.Example), ("pathItems", ObjectKind.PathItem), ("mediaTypes", ObjectKind.MediaType)
     ];
 
-    internal static bool IsHttpMethod(string method) => method is "get" or "put" or "post" or "delete" or "options" or "head" or "patch" or "trace";
+    internal static IEnumerable<KeyValuePair<string, JsonNode?>> Operations(JsonObject pathItem)
+    {
+        foreach (var entry in pathItem.ToArray())
+            if (IsHttpMethod(entry.Key))
+                yield return entry;
+        if (pathItem["additionalOperations"] is JsonObject additional)
+            foreach (var entry in additional.ToArray())
+                yield return new("additionalOperations/" + Escape(entry.Key), entry.Value);
+    }
+
+    internal static bool IsHttpMethod(string method) => method is "get" or "put" or "post" or "delete" or "options" or "head" or "patch" or "trace" or "query";
     internal static string Escape(string value) => value.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
     internal static string Unescape(string value) => value.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal);
 }

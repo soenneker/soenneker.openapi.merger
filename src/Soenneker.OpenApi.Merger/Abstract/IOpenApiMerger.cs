@@ -6,7 +6,7 @@ using Microsoft.OpenApi;
 namespace Soenneker.OpenApi.Merger.Abstract;
 
 /// <summary>
-/// Merges OpenAPI 3.0 and 3.1 documents while preserving operation contracts and namespacing colliding identifiers.
+/// Merges OpenAPI 3.0, 3.1 and 3.2 documents while preserving operation contracts and namespacing colliding identifiers.
 /// </summary>
 public interface IOpenApiMerger
 {
@@ -50,7 +50,7 @@ public interface IOpenApiMerger
     ValueTask<OpenApiDocument> MergeGitUrl(string gitUrl, string? repositorySubdirectory = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Serializes a merged document as OpenAPI 3.0 JSON, or 3.1 JSON if any merged input used 3.1.
+    /// Serializes a merged document using the highest OpenAPI version among its inputs (3.0, 3.1 or 3.2).
     /// </summary>
     /// <param name="document">The document to serialize.</param>
     /// <returns>OpenAPI JSON with the merged document's schema semantics preserved.</returns>

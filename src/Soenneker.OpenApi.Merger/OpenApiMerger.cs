@@ -29,7 +29,6 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
     private readonly IFileUtil _fileUtil;
     private readonly IMemoryStreamUtil _memoryStreamUtil;
     private readonly IYamlUtil _yamlUtil;
-    private sealed record OutputVersion(bool Is31);
     private static readonly ConditionalWeakTable<OpenApiDocument, OutputVersion> _versions = new();
     private static readonly StringComparer _filePathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
@@ -99,7 +98,9 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
         ArgumentNullException.ThrowIfNull(document);
         using var text = new StringWriter(new StringBuilder(4096));
         var writer = new OpenApiJsonWriter(text);
-        if (_versions.TryGetValue(document, out OutputVersion? version) && version.Is31)
+        if (_versions.TryGetValue(document, out OutputVersion? version) && version.Is32)
+            document.SerializeAsV32(writer);
+        else if (version?.Is31 == true)
             document.SerializeAsV31(writer);
         else
             document.SerializeAsV3(writer);
@@ -137,15 +138,15 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
             throw new InvalidOperationException($"'{fullPath}' has no OpenAPI version declaration.");
         }
         string? version = StringValue(root["openapi"]);
-        if (version == null || !System.Text.RegularExpressions.Regex.IsMatch(version, @"^3\.[01]\.\d+$"))
-            throw new InvalidOperationException($"'{fullPath}' must use OpenAPI 3.0 or 3.1; unsupported versions cannot be merged without losing semantics.");
+        if (version == null || !System.Text.RegularExpressions.Regex.IsMatch(version, @"^3\.[012]\.\d+$"))
+            throw new InvalidOperationException($"'{fullPath}' must use OpenAPI 3.0, 3.1 or 3.2; unsupported versions cannot be merged without losing semantics.");
         if (root["info"] is not JsonObject info || string.IsNullOrWhiteSpace(StringValue(info["title"])) || string.IsNullOrWhiteSpace(StringValue(info["version"])))
             throw new InvalidOperationException($"'{fullPath}' requires info.title and info.version.");
         // Shared component documents are common inputs to multi-file specifications.
         if (!root.ContainsKey("paths") && root["components"] is JsonObject)
             root["paths"] = new JsonObject();
-        if (root["paths"] is not JsonObject && !(version.StartsWith("3.1.", StringComparison.Ordinal) && root["webhooks"] is JsonObject))
-            throw new InvalidOperationException($"'{fullPath}' requires a paths object (or webhooks for OpenAPI 3.1).");
+        if (root["paths"] is not JsonObject && !(!version.StartsWith("3.0.", StringComparison.Ordinal) && root["webhooks"] is JsonObject))
+            throw new InvalidOperationException($"'{fullPath}' requires a paths object (or webhooks for OpenAPI 3.1 or 3.2).");
         ValidatePrefix(prefix);
         if (version.StartsWith("3.0.", StringComparison.Ordinal) && (root.ContainsKey("webhooks") || root.ContainsKey("jsonSchemaDialect") || root["components"]?["pathItems"] != null))
             throw new InvalidOperationException($"'{fullPath}' uses OpenAPI 3.1 fields with an OpenAPI 3.0 version declaration.");
@@ -161,7 +162,8 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
             if (!lookup.TryAdd(source.FilePath, source))
                 throw new InvalidOperationException($"OpenAPI file '{source.FilePath}' was supplied more than once; reference targets would be ambiguous.");
 
-        bool is31 = sources.Any(static source => StringValue(source.Document["openapi"])!.StartsWith("3.1.", StringComparison.Ordinal));
+        bool is32 = sources.Any(static source => StringValue(source.Document["openapi"])!.StartsWith("3.2.", StringComparison.Ordinal));
+        bool is31 = is32 || sources.Any(static source => StringValue(source.Document["openapi"])!.StartsWith("3.1.", StringComparison.Ordinal));
         Dictionary<string, HashSet<string>> reserved = JsonTraversal.ComponentSections.ToDictionary(static section => section.Section, static _ => new HashSet<string>(StringComparer.Ordinal));
         var operationIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (SourceDocument source in sources)
@@ -238,7 +240,7 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
 
         var merged = new JsonObject
         {
-            ["openapi"] = is31 ? "3.1.1" : "3.0.3",
+            ["openapi"] = is32 ? "3.2.0" : is31 ? "3.1.1" : "3.0.3",
             ["info"] = new JsonObject { ["title"] = "Merged OpenAPI", ["version"] = "1.0.0" },
             ["paths"] = new JsonObject(), ["components"] = new JsonObject()
         };
@@ -309,7 +311,7 @@ public sealed partial class OpenApiMerger : IOpenApiMerger
         ValidateContract(merged, cancellationToken);
         OpenApiDocument result = ReadModel(merged, "merged output", validate: true);
         new OpenApiWalker(new SchemaKeywordPreserver(is31)).Walk(result);
-        _versions.Add(result, new OutputVersion(is31));
+        _versions.Add(result, new OutputVersion(is31, is32));
         // Verify the actual consumer-facing serialization, including model reference resolution.
         JsonObject emitted = JsonNode.Parse(ToJson(result))!.AsObject();
         ValidateContract(emitted, cancellationToken);

@@ -89,9 +89,9 @@ public sealed partial class OpenApiMerger
             JsonNode servers = obj["servers"] is JsonArray pathServers && pathServers.Count > 0 ? pathServers :
                 root["servers"] is JsonArray rootServers && rootServers.Count > 0 ? rootServers :
                 new JsonArray(new JsonObject { ["url"] = "/" });
-            foreach ((string method, JsonNode? node) in obj.ToArray())
+            foreach ((string method, JsonNode? node) in JsonTraversal.Operations(obj))
             {
-                if (!JsonTraversal.IsHttpMethod(method) || node is not JsonObject operation)
+                if (node is not JsonObject operation)
                     continue;
                 if (operation.ContainsKey("servers") && operation["servers"] is not JsonArray)
                     throw new InvalidOperationException($"Servers at {pointer}/{method} must be an array.");
@@ -147,6 +147,24 @@ public sealed partial class OpenApiMerger
 
             foreach ((string field, JsonNode? value) in candidate)
             {
+                if (field == "additionalOperations" && value is JsonObject additional)
+                {
+                    JsonObject target = (existing[field] ??= new JsonObject()).AsObject();
+                    foreach ((string method, JsonNode? extra) in additional)
+                    {
+                        if (extra is not JsonObject extraOperation)
+                            throw new InvalidOperationException($"Operation '{method} {path}' must be an object.");
+                        if (target[method] is JsonObject prior)
+                        {
+                            if (!JsonNode.DeepEquals(OperationSignature(prior, merged), OperationSignature(extraOperation, merged)))
+                                throw new InvalidOperationException($"Multiple source documents produced different operations for '{method} {path}'.");
+                            MergeDocumentation(prior, extraOperation, merged);
+                        }
+                        else
+                            target[method] = extraOperation.DeepClone();
+                    }
+                    continue;
+                }
                 if (!JsonTraversal.IsHttpMethod(field))
                 {
                     MergeMetadata(existing, field, value, path);
